@@ -118,6 +118,10 @@ app.get('/api/health', (req, res) => {
   res.json({ success: true, message: 'Aditri API is running', timestamp: new Date() });
 });
 
+app.get("/", (req, res) => {
+  res.json({ success: true, message: "Backend working" });
+});
+
 // ─── Error Handler ────────────────────────────────────────────────────────────
 app.use(errorHandler);
 
