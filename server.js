@@ -49,7 +49,7 @@ const corsOptions = {
   origin: function (origin, callback) {
     const allowed = [
       process.env.CLIENT_URL || 'http://localhost:5173',
-      'https://aditri-frontend.vercel.app/',
+      'https://aditri-frontend2.vercel.app/',
     ];
     if (!origin || allowed.includes(origin)) {
       callback(null, true);
