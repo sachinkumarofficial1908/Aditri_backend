@@ -53,9 +53,10 @@ exports.login = async (req, res, next) => {
     if (!errors.isEmpty()) {
       return res.status(400).json({ success: false, errors: errors.array() });
     }
-    const { email, password } = req.body;
-
-    const user = await User.findOne({ email }).select('+password');
+    const { email, phone, password } = req.body;
+    const user = await User.findOne(
+      email ? { email } : { phone }
+    ).select('+password');
     if (!user) {
       return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }

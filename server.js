@@ -25,11 +25,17 @@ const inquiryRoutes = require('./src/routes/inquiries');
 const projectRoutes = require('./src/routes/projects');
 const adminRoutes = require('./src/routes/admin');
 const uploadRoutes = require('./src/routes/upload');
+const wageSlipRoutes = require('./src/routes/wageSlipRoutes');
+const musterRoutes = require('./src/routes/muster');
+const attendanceRoutes = require('./src/routes/attendance');
+const employeeRoutes = require('./src/routes/employees');
 
 // Connect Database
 connectDB();
 
 const app = express();
+app.disable('x-powered-by');
+app.set('trust proxy', 1);
 
 // ─── Security Middleware ───────────────────────────────────────────────────────
 app.use(helmet({
@@ -106,7 +112,14 @@ if (process.env.NODE_ENV === 'development') {
 }
 
 // Static files (uploads)
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
+  maxAge: '1d',
+  setHeaders: (res, path) => {
+    if (path.endsWith('.svg')) {
+      res.setHeader('Content-Type', 'image/svg+xml');
+    }
+  },
+}));
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 app.use('/api/auth', authRoutes);
@@ -115,6 +128,10 @@ app.use('/api/orders', orderRoutes);
 app.use('/api/inquiries', inquiryRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/employees', employeeRoutes);
+app.use('/api/muster', musterRoutes);
+app.use('/api/attendance', attendanceRoutes);
+app.use('/api/wage-slips', wageSlipRoutes);
 app.use('/api/upload', uploadRoutes);
 
 // Health check

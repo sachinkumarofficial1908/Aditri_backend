@@ -26,10 +26,12 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['user', 'admin'],
+    enum: ['user', 'supervisor', 'admin'],
     default: 'user',
   },
   phone: { type: String, trim: true },
+  fatherName: { type: String, trim: true },
+  siteName: { type: String, trim: true },
   isActive: { type: Boolean, default: true },
   lastLogin: { type: Date },
   loginAttempts: { type: Number, default: 0 },
