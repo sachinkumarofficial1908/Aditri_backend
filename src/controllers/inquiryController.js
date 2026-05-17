@@ -86,29 +86,34 @@ exports.createInquiry = async (req, res, next) => {
       userAgent: req.headers['user-agent'],
     });
 
-    // Notify admin
-    await sendEmail({
-      to: process.env.SMTP_EMAIL,
-      subject: `New Inquiry: ${inquiry.subject}`,
-      html: `<h3>New Inquiry from ${inquiry.name}</h3>
-        <p><strong>Email:</strong> ${inquiry.email}</p>
-        <p><strong>Phone:</strong> ${inquiry.phone || 'N/A'}</p>
-        <p><strong>Company:</strong> ${inquiry.company || 'N/A'}</p>
-        <p><strong>Service:</strong> ${inquiry.serviceType}</p>
-        <p><strong>Message:</strong><br>${inquiry.message}</p>`,
-    });
-
-    // Auto-reply to user
-    await sendEmail({
-      to: inquiry.email,
-      subject: 'Thank you for contacting Aditri Constructions Services',
-      html: `<h3>Dear ${inquiry.name},</h3>
-        <p>Thank you for reaching out to us. We have received your inquiry and will get back to you within 24 hours.</p>
-        <p><strong>Your Reference Number:</strong> ${inquiry._id}</p>
-        <br><p>Best Regards,<br>Aditri Constructions Services Team<br>+91 9598033414</p>`,
-    });
-
     res.status(201).json({ success: true, message: 'Inquiry submitted successfully', id: inquiry._id });
+
+    Promise.allSettled([
+      sendEmail({
+        to: process.env.SMTP_EMAIL,
+        subject: `New Inquiry: ${inquiry.subject}`,
+        html: `<h3>New Inquiry from ${inquiry.name}</h3>
+          <p><strong>Email:</strong> ${inquiry.email}</p>
+          <p><strong>Phone:</strong> ${inquiry.phone || 'N/A'}</p>
+          <p><strong>Company:</strong> ${inquiry.company || 'N/A'}</p>
+          <p><strong>Service:</strong> ${inquiry.serviceType}</p>
+          <p><strong>Message:</strong><br>${inquiry.message}</p>`,
+      }),
+      sendEmail({
+        to: inquiry.email,
+        subject: 'Thank you for contacting Aditri Constructions Services',
+        html: `<h3>Dear ${inquiry.name},</h3>
+          <p>Thank you for reaching out to us. We have received your inquiry and will get back to you within 24 hours.</p>
+          <p><strong>Your Reference Number:</strong> ${inquiry._id}</p>
+          <br><p>Best Regards,<br>Aditri Constructions Services Team<br>+91 9598033414</p>`,
+      }),
+    ]).then((results) => {
+      results.forEach((result) => {
+        if (result.status === 'rejected') {
+          logger.error(`Inquiry email failed after submit: ${result.reason?.message || result.reason}`);
+        }
+      });
+    });
   } catch (err) { next(err); }
 };
 
