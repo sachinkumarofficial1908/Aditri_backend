@@ -98,8 +98,17 @@ const getRequestOrigin = (req) => {
   return host ? `${proto}://${host}` : null;
 };
 
-const getGoogleRedirectUri = (req) => (
-  `${getRequestOrigin(req) || process.env.SERVER_URL || `http://localhost:${process.env.PORT || 5000}`}/api/auth/google/callback`
+const getBackendOriginForClient = (clientUrl, req) => {
+  const clientOrigin = normalizeOrigin(clientUrl);
+  if (clientOrigin === 'http://localhost:5173' || clientOrigin === 'http://localhost:3000') {
+    return process.env.LOCAL_SERVER_URL || `http://localhost:${process.env.PORT || 10000}`;
+  }
+
+  return process.env.SERVER_URL || getRequestOrigin(req) || `http://localhost:${process.env.PORT || 10000}`;
+};
+
+const getGoogleRedirectUri = (req, clientUrl) => (
+  `${getBackendOriginForClient(clientUrl, req)}/api/auth/google/callback`
 );
 
 const normalizeOrigin = (value) => {
@@ -454,7 +463,7 @@ exports.googleOAuthStart = async (req, res, next) => {
 
     const mode = req.query.mode === 'register' ? 'register' : 'login';
     const clientUrl = getClientUrl(req.query.clientUrl || req.get('origin') || req.get('referer'));
-    const redirectUri = getGoogleRedirectUri(req);
+    const redirectUri = getGoogleRedirectUri(req, clientUrl);
     const state = signOAuthState({
       mode,
       clientUrl,
@@ -490,7 +499,7 @@ exports.googleOAuthCallback = async (req, res) => {
     if (!req.query.code) {
       throw new Error('Missing Google OAuth code');
     }
-    const profile = await exchangeGoogleCode(req.query.code, state.redirectUri || getGoogleRedirectUri(req));
+    const profile = await exchangeGoogleCode(req.query.code, state.redirectUri || getGoogleRedirectUri(req, state.clientUrl));
     const user = await findOrCreateGoogleUser(profile);
 
     logger.info(`Google OAuth ${state.mode}: ${user.email}`);
