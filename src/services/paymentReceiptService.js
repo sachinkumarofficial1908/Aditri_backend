@@ -1,7 +1,6 @@
 'use strict';
 const ExcelJS = require('exceljs');
 const PDFDocument = require('pdfkit');
-const { ZipArchive } = require('archiver');
 const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
@@ -14,6 +13,17 @@ const idbiLogoCandidates = [
 ];
 
 const getIdbiLogoPath = () => idbiLogoCandidates.find((logoPath) => fs.existsSync(logoPath));
+
+async function createZipArchive() {
+  const archiverModule = await import('archiver');
+  if (typeof archiverModule.ZipArchive === 'function') {
+    return new archiverModule.ZipArchive({ zlib: { level: 9 } });
+  }
+  if (typeof archiverModule.default === 'function') {
+    return archiverModule.default('zip', { zlib: { level: 9 } });
+  }
+  throw new Error('Unable to initialize ZIP archive');
+}
 
 const requiredHeaders = [
   'Beneficiary Name',
@@ -459,19 +469,20 @@ async function createPaymentReceiptZip({
   const zipFileName = `transaction-receipts-${uuidv4()}.zip`;
   const zipFilePath = path.join(generatedDir, zipFileName);
   const output = fs.createWriteStream(zipFilePath);
-  const archive = new ZipArchive({ zlib: { level: 9 } });
+  const archive = await createZipArchive();
 
   archive.pipe(output);
   pdfFiles.forEach((filePath) => {
     archive.file(filePath, { name: path.basename(filePath) });
   });
-  await archive.finalize();
 
-  await new Promise((resolve, reject) => {
+  const zipDone = new Promise((resolve, reject) => {
     output.on('close', resolve);
     output.on('error', reject);
     archive.on('error', reject);
   });
+  await archive.finalize();
+  await zipDone;
 
   pdfFiles.forEach((filePath) => {
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
