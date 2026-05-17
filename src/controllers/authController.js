@@ -92,9 +92,14 @@ const sendToken = (user, statusCode, res) => {
     });
 };
 
-const getGoogleRedirectUri = () => (
-  process.env.GOOGLE_CALLBACK_URL ||
-  `${process.env.SERVER_URL || `http://localhost:${process.env.PORT || 5000}`}/api/auth/google/callback`
+const getRequestOrigin = (req) => {
+  const proto = req.get('x-forwarded-proto') || req.protocol || 'http';
+  const host = req.get('x-forwarded-host') || req.get('host');
+  return host ? `${proto}://${host}` : null;
+};
+
+const getGoogleRedirectUri = (req) => (
+  `${getRequestOrigin(req) || process.env.SERVER_URL || `http://localhost:${process.env.PORT || 5000}`}/api/auth/google/callback`
 );
 
 const normalizeOrigin = (value) => {
@@ -167,7 +172,7 @@ const redirectWithOAuthError = (res, message = 'Google sign-in failed', clientUr
   return res.redirect(failureUrl.toString());
 };
 
-const exchangeGoogleCode = async (code) => {
+const exchangeGoogleCode = async (code, redirectUri) => {
   if (typeof fetch !== 'function') {
     throw new Error('OAuth requires Node.js 18+ fetch support');
   }
@@ -179,7 +184,7 @@ const exchangeGoogleCode = async (code) => {
       code,
       client_id: process.env.GOOGLE_CLIENT_ID,
       client_secret: process.env.GOOGLE_CLIENT_SECRET,
-      redirect_uri: getGoogleRedirectUri(),
+      redirect_uri: redirectUri,
       grant_type: 'authorization_code',
     }),
   });
@@ -449,16 +454,18 @@ exports.googleOAuthStart = async (req, res, next) => {
 
     const mode = req.query.mode === 'register' ? 'register' : 'login';
     const clientUrl = getClientUrl(req.query.clientUrl || req.get('origin') || req.get('referer'));
+    const redirectUri = getGoogleRedirectUri(req);
     const state = signOAuthState({
       mode,
       clientUrl,
+      redirectUri,
       redirect: sanitizeRedirect(req.query.redirect),
       exp: Date.now() + 10 * 60 * 1000,
     });
 
     const googleUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
     googleUrl.searchParams.set('client_id', process.env.GOOGLE_CLIENT_ID);
-    googleUrl.searchParams.set('redirect_uri', getGoogleRedirectUri());
+    googleUrl.searchParams.set('redirect_uri', redirectUri);
     googleUrl.searchParams.set('response_type', 'code');
     googleUrl.searchParams.set('scope', 'openid email profile');
     googleUrl.searchParams.set('prompt', 'select_account');
@@ -483,7 +490,7 @@ exports.googleOAuthCallback = async (req, res) => {
     if (!req.query.code) {
       throw new Error('Missing Google OAuth code');
     }
-    const profile = await exchangeGoogleCode(req.query.code);
+    const profile = await exchangeGoogleCode(req.query.code, state.redirectUri || getGoogleRedirectUri(req));
     const user = await findOrCreateGoogleUser(profile);
 
     logger.info(`Google OAuth ${state.mode}: ${user.email}`);

@@ -56,16 +56,23 @@ app.use(helmet({
 }));
 
 // CORS
+const envOrigins = [
+  process.env.CLIENT_URL,
+  process.env.FRONTEND_URL,
+  ...(process.env.CORS_ORIGINS || '').split(','),
+  ...(process.env.OAUTH_ALLOWED_CLIENT_URLS || '').split(','),
+];
+
+const allowedOrigins = [
+  ...envOrigins,
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'https://aditri-frontend2.vercel.app',
+].map((origin) => origin?.trim()).filter(Boolean);
+
 const corsOptions = {
   origin: function (origin, callback) {
-    const allowed = [
-      process.env.CLIENT_URL,
-      'http://localhost:5173',
-      'http://localhost:3000',
-      'https://aditri-frontend2.vercel.app',
-    ].filter(Boolean);
-
-    if (!origin || allowed.includes(origin)) {
+    if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
       callback(new Error(`Not allowed by CORS: ${origin}`));
