@@ -118,21 +118,45 @@ const employeeSchema = new mongoose.Schema({
     required: [true, 'Daily wages rate is required'],
     min: [0, 'Daily wages rate must be positive'],
   },
-  photoUrl: {
+  govDailyWage: {
+    type: Number,
+    default: 0,
+    min: [0, 'Government daily wage must be positive'],
+  },
+  photoPath: {
     type: String,
     trim: true,
   },
   clmsId: {
     type: String,
+    required: [true, 'CLMS ID is required'],
+    unique: true,
     trim: true,
   },
   status: {
     type: String,
-    enum: ['Active', 'Terminated'],
-    default: 'Active',
+    enum: ['Valid', 'Terminate', 'Debarred'],
+    default: 'Valid',
   },
   terminatedAt: Date,
   createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+  },
+  // Salary Management Module fields
+  gov_rate: {
+    type: Number,
+    default: 0,
+    min: [0, 'Government rate must be positive'],
+    decimal: true,
+  },
+  comp_rate: {
+    type: Number,
+    default: 0,
+    min: [0, 'Company rate must be positive'],
+    decimal: true,
+  },
+  supervisor_id: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
   },

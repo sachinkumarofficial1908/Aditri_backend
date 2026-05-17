@@ -1,5 +1,6 @@
 'use strict';
 const Project = require('../models/Project');
+const { logActivity } = require('../middleware/activityLogger');
 
 exports.getProjects = async (req, res, next) => {
   try {
@@ -28,6 +29,21 @@ exports.getProject = async (req, res, next) => {
 exports.createProject = async (req, res, next) => {
   try {
     const project = await Project.create(req.body);
+    
+    // Log activity
+    await logActivity({
+      req,
+      adminId: req.user._id,
+      adminName: req.user.name,
+      adminEmail: req.user.email,
+      action: 'project_create',
+      targetType: 'project',
+      targetId: project._id,
+      targetName: project.name,
+      details: { category: project.category },
+      status: 'success',
+    });
+    
     res.status(201).json({ success: true, project });
   } catch (err) { next(err); }
 };
@@ -36,13 +52,43 @@ exports.updateProject = async (req, res, next) => {
   try {
     const project = await Project.findByIdAndUpdate(req.params.id, req.body, { new: true });
     if (!project) return res.status(404).json({ success: false, message: 'Project not found' });
+    
+    // Log activity
+    await logActivity({
+      req,
+      adminId: req.user._id,
+      adminName: req.user.name,
+      adminEmail: req.user.email,
+      action: 'project_update',
+      targetType: 'project',
+      targetId: project._id,
+      targetName: project.name,
+      details: { updatedFields: Object.keys(req.body) },
+      status: 'success',
+    });
+    
     res.json({ success: true, project });
   } catch (err) { next(err); }
 };
 
 exports.deleteProject = async (req, res, next) => {
   try {
-    await Project.findByIdAndUpdate(req.params.id, { isActive: false });
+    const project = await Project.findByIdAndUpdate(req.params.id, { isActive: false });
+    if (!project) return res.status(404).json({ success: false, message: 'Project not found' });
+    
+    // Log activity
+    await logActivity({
+      req,
+      adminId: req.user._id,
+      adminName: req.user.name,
+      adminEmail: req.user.email,
+      action: 'project_delete',
+      targetType: 'project',
+      targetId: project._id,
+      targetName: project.name,
+      status: 'success',
+    });
+    
     res.json({ success: true, message: 'Project deleted' });
   } catch (err) { next(err); }
 };

@@ -23,6 +23,7 @@ const orderSchema = new mongoose.Schema({
     city: { type: String, required: true },
     state: { type: String, required: true },
     pincode: { type: String, required: true },
+    phone: { type: String, required: true, match: [/^\d{10}$/, 'Invalid delivery phone number'] },
     country: { type: String, default: 'India' },
   },
   paymentMethod: {

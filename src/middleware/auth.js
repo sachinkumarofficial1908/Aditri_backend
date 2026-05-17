@@ -42,6 +42,14 @@ const adminOnly = (req, res, next) => {
   }
 };
 
+const supervisorOnly = (req, res, next) => {
+  if (req.user && (req.user.role === 'supervisor' || req.user.role === 'admin')) {
+    next();
+  } else {
+    res.status(403).json({ success: false, message: 'Supervisor access required' });
+  }
+};
+
 const authorize = (...roles) => {
   return (req, res, next) => {
     if (!roles.includes(req.user.role)) {
@@ -54,4 +62,14 @@ const authorize = (...roles) => {
   };
 };
 
-module.exports = { protect, adminOnly, authorize };
+// Export with both original names and aliases
+module.exports = {
+  protect,
+  adminOnly,
+  supervisorOnly,
+  authorize,
+  // Aliases for new routes
+  auth: protect,
+  supervisorAuth: supervisorOnly,
+  adminAuth: adminOnly
+};

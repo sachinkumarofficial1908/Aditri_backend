@@ -1,29 +1,257 @@
 'use strict';
 const { validationResult } = require('express-validator');
 const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
+const nodemailer = require('nodemailer');
 const User = require('../models/User');
 const logger = require('../utils/logger');
+const { logActivity } = require('../middleware/activityLogger');
 
-const sendToken = (user, statusCode, res) => {
-  const token = user.getSignedToken();
-  const options = {
+const getTokenCookieOptions = () => ({
     expires: new Date(Date.now() + parseInt(process.env.JWT_COOKIE_EXPIRE || 7) * 24 * 60 * 60 * 1000),
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
+});
+
+const getSafeUser = (user) => ({
+  id: user._id,
+  name: user.name,
+  email: user.email,
+  role: user.role,
+  phone: user.phone,
+  avatar: user.avatar,
+});
+
+const TEST_OTP_PHONE = '9999999999';
+const PHONE_OTP_TTL_MS = 3 * 60 * 1000;
+const PHONE_OTP_MAX_ATTEMPTS = 5;
+const phoneOtpChallenges = new Map();
+const EMAIL_OTP_TTL_MS = 5 * 60 * 1000;
+const EMAIL_OTP_MAX_ATTEMPTS = 5;
+const emailOtpChallenges = new Map();
+
+const hashOtp = (otp) => crypto.createHash('sha256').update(otp).digest('hex');
+
+const getSmtpConfig = () => {
+  const port = parseInt(process.env.SMTP_PORT, 10) || 587;
+  return {
+    host: (process.env.SMTP_HOST || '').trim(),
+    port,
+    secure: port === 465,
+    user: (process.env.SMTP_EMAIL || '').trim(),
+    pass: (process.env.SMTP_PASSWORD || '').replace(/\s+/g, ''),
+    fromEmail: (process.env.FROM_EMAIL || process.env.SMTP_EMAIL || '').trim(),
+    fromName: (process.env.FROM_NAME || 'Aditri Constructions Services').trim(),
   };
+};
+
+const sendEmail = async ({ to, subject, html }) => {
+  const smtp = getSmtpConfig();
+  if (!smtp.user || !smtp.pass) {
+    throw new Error('Email service is not configured. Check SMTP_EMAIL and SMTP_PASSWORD.');
+  }
+
+  const transporter = nodemailer.createTransport({
+    host: smtp.host,
+    port: smtp.port,
+    secure: smtp.secure,
+    auth: { user: smtp.user, pass: smtp.pass },
+  });
+
+  await transporter.sendMail({
+    from: `"${smtp.fromName}" <${smtp.fromEmail}>`,
+    to,
+    subject,
+    html,
+  });
+};
+
+const clearExpiredPhoneOtps = () => {
+  const now = Date.now();
+  for (const [id, challenge] of phoneOtpChallenges.entries()) {
+    if (challenge.expiresAt <= now) phoneOtpChallenges.delete(id);
+  }
+};
+
+const clearExpiredEmailOtps = () => {
+  const now = Date.now();
+  for (const [id, challenge] of emailOtpChallenges.entries()) {
+    if (challenge.expiresAt <= now) emailOtpChallenges.delete(id);
+  }
+};
+
+const sendToken = (user, statusCode, res) => {
+  const token = user.getSignedToken();
   res.status(statusCode)
-    .cookie('token', token, options)
+    .cookie('token', token, getTokenCookieOptions())
     .json({
       success: true,
       token,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-      },
+      user: getSafeUser(user),
     });
+};
+
+const getGoogleRedirectUri = () => (
+  process.env.GOOGLE_CALLBACK_URL ||
+  `${process.env.SERVER_URL || `http://localhost:${process.env.PORT || 5000}`}/api/auth/google/callback`
+);
+
+const normalizeOrigin = (value) => {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return null;
+  }
+};
+
+const getAllowedClientOrigins = () => {
+  const configured = [
+    process.env.CLIENT_URL,
+    ...(process.env.OAUTH_ALLOWED_CLIENT_URLS || '').split(','),
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'https://aditri-frontend2.vercel.app',
+  ];
+
+  return configured.map((url) => normalizeOrigin(url?.trim())).filter(Boolean);
+};
+
+const getClientUrl = (preferredUrl) => {
+  const preferredOrigin = normalizeOrigin(preferredUrl);
+  const allowedOrigins = getAllowedClientOrigins();
+
+  if (preferredOrigin && allowedOrigins.includes(preferredOrigin)) {
+    return preferredOrigin;
+  }
+
+  return normalizeOrigin(process.env.CLIENT_URL) || 'http://localhost:5173';
+};
+
+const sanitizeRedirect = (redirectPath = '/') => {
+  if (typeof redirectPath !== 'string') return '/';
+  if (!redirectPath.startsWith('/') || redirectPath.startsWith('//')) return '/';
+  return redirectPath;
+};
+
+const signOAuthState = (payload) => {
+  const secret = process.env.JWT_SECRET;
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const signature = crypto.createHmac('sha256', secret).update(body).digest('base64url');
+  return `${body}.${signature}`;
+};
+
+const verifyOAuthState = (state) => {
+  if (!state || typeof state !== 'string') throw new Error('Missing OAuth state');
+  const [body, signature] = state.split('.');
+  if (!body || !signature) throw new Error('Invalid OAuth state');
+
+  const expected = crypto.createHmac('sha256', process.env.JWT_SECRET).update(body).digest('base64url');
+  const signatureBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expected);
+  if (
+    signatureBuffer.length !== expectedBuffer.length ||
+    !crypto.timingSafeEqual(signatureBuffer, expectedBuffer)
+  ) {
+    throw new Error('Invalid OAuth state signature');
+  }
+
+  const parsed = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+  if (!parsed.exp || parsed.exp < Date.now()) throw new Error('OAuth state expired');
+  return parsed;
+};
+
+const redirectWithOAuthError = (res, message = 'Google sign-in failed', clientUrl) => {
+  const failureUrl = new URL('/login', getClientUrl(clientUrl));
+  failureUrl.searchParams.set('oauthError', message);
+  return res.redirect(failureUrl.toString());
+};
+
+const exchangeGoogleCode = async (code) => {
+  if (typeof fetch !== 'function') {
+    throw new Error('OAuth requires Node.js 18+ fetch support');
+  }
+
+  const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      code,
+      client_id: process.env.GOOGLE_CLIENT_ID,
+      client_secret: process.env.GOOGLE_CLIENT_SECRET,
+      redirect_uri: getGoogleRedirectUri(),
+      grant_type: 'authorization_code',
+    }),
+  });
+
+  const tokens = await tokenResponse.json();
+  if (!tokenResponse.ok || !tokens.id_token) {
+    throw new Error(tokens.error_description || 'Unable to exchange Google OAuth code');
+  }
+
+  const profileResponse = await fetch(
+    `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(tokens.id_token)}`
+  );
+  const profile = await profileResponse.json();
+  if (!profileResponse.ok) {
+    throw new Error(profile.error_description || 'Unable to verify Google identity token');
+  }
+
+  if (profile.aud !== process.env.GOOGLE_CLIENT_ID) {
+    throw new Error('Google identity token audience mismatch');
+  }
+
+  if (profile.email_verified !== true && profile.email_verified !== 'true') {
+    throw new Error('Google email is not verified');
+  }
+
+  if (!profile.email || !profile.sub) {
+    throw new Error('Google profile is missing required identity fields');
+  }
+
+  return profile;
+};
+
+const findOrCreateGoogleUser = async (profile) => {
+  const email = profile.email.toLowerCase();
+  let user = await User.findOne({ $or: [{ googleId: profile.sub }, { email }] });
+
+  if (!user) {
+    return User.create({
+      name: profile.name || email.split('@')[0],
+      email,
+      authProvider: 'google',
+      googleId: profile.sub,
+      avatar: profile.picture,
+      role: 'user',
+      lastLogin: new Date(),
+    });
+  }
+
+  await User.updateOne(
+    { _id: user._id },
+    {
+      $set: {
+        googleId: user.googleId || profile.sub,
+        avatar: user.avatar || profile.picture,
+        lastLogin: new Date(),
+      },
+    }
+  );
+
+  return User.findById(user._id);
+};
+
+const redirectWithOAuthToken = (user, state, res) => {
+  const token = user.getSignedToken();
+  const successUrl = new URL('/oauth/callback', getClientUrl(state.clientUrl));
+  successUrl.searchParams.set('token', token);
+  successUrl.searchParams.set('user', Buffer.from(JSON.stringify(getSafeUser(user))).toString('base64url'));
+  successUrl.searchParams.set('redirect', sanitizeRedirect(state.redirect));
+
+  return res
+    .cookie('token', token, getTokenCookieOptions())
+    .redirect(successUrl.toString());
 };
 
 // @POST /api/auth/register
@@ -33,17 +261,127 @@ exports.register = async (req, res, next) => {
     if (!errors.isEmpty()) {
       return res.status(400).json({ success: false, errors: errors.array() });
     }
-    const { name, email, password, phone } = req.body;
+    const { name, email, password, phone, emailVerificationToken } = req.body;
 
     const existing = await User.findOne({ email });
     if (existing) {
       return res.status(400).json({ success: false, message: 'Email already registered' });
     }
 
+    try {
+      const decoded = jwt.verify(emailVerificationToken, process.env.JWT_SECRET);
+      if (decoded.purpose !== 'register_email' || decoded.email !== email) {
+        throw new Error('Email verification mismatch');
+      }
+    } catch {
+      return res.status(400).json({ success: false, message: 'Please verify your email OTP before registering' });
+    }
+
     const user = await User.create({ name, email, password, phone, role: 'user' });
     logger.info(`New user registered: ${email}`);
     sendToken(user, 201, res);
   } catch (err) { next(err); }
+};
+
+// @POST /api/auth/register/email-otp/send
+exports.sendRegisterEmailOtp = async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    clearExpiredEmailOtps();
+
+    const email = req.body.email.toLowerCase();
+    const existing = await User.findOne({ email });
+    if (existing) {
+      return res.status(400).json({ success: false, message: 'Email already registered' });
+    }
+
+    const otp = crypto.randomInt(100000, 1000000).toString();
+    const verificationId = crypto.randomUUID();
+
+    emailOtpChallenges.set(verificationId, {
+      email,
+      otpHash: hashOtp(otp),
+      expiresAt: Date.now() + EMAIL_OTP_TTL_MS,
+      attempts: 0,
+    });
+
+    await sendEmail({
+      to: email,
+      subject: 'Your Aditri registration OTP',
+      html: `<h3>Email Verification</h3>
+        <p>Your OTP for Aditri registration is:</p>
+        <h2 style="letter-spacing: 4px;">${otp}</h2>
+        <p>This OTP expires in 5 minutes.</p>`,
+    });
+
+    res.json({
+      success: true,
+      message: 'OTP sent to your email address.',
+      verificationId,
+      expiresInSeconds: EMAIL_OTP_TTL_MS / 1000,
+    });
+  } catch (err) {
+    logger.error(`Registration email OTP failed: ${err.message}`);
+    res.status(500).json({
+      success: false,
+      message: 'Unable to send email OTP. Check SMTP/Gmail app password settings.',
+    });
+  }
+};
+
+// @POST /api/auth/register/email-otp/verify
+exports.verifyRegisterEmailOtp = async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const email = req.body.email.toLowerCase();
+    const { otp, verificationId } = req.body;
+    const challenge = emailOtpChallenges.get(verificationId);
+
+    if (!challenge || challenge.expiresAt <= Date.now()) {
+      emailOtpChallenges.delete(verificationId);
+      return res.status(400).json({ success: false, message: 'Email OTP expired. Please request a new OTP.' });
+    }
+
+    if (challenge.email !== email) {
+      return res.status(400).json({ success: false, message: 'OTP verification does not match this email.' });
+    }
+
+    if (challenge.attempts >= EMAIL_OTP_MAX_ATTEMPTS) {
+      emailOtpChallenges.delete(verificationId);
+      return res.status(400).json({ success: false, message: 'Too many OTP attempts. Please request a new OTP.' });
+    }
+
+    challenge.attempts += 1;
+
+    if (challenge.otpHash !== hashOtp(otp)) {
+      return res.status(400).json({ success: false, message: 'Invalid email OTP. Please check and try again.' });
+    }
+
+    emailOtpChallenges.delete(verificationId);
+
+    const emailVerificationToken = jwt.sign(
+      { email, purpose: 'register_email' },
+      process.env.JWT_SECRET,
+      { expiresIn: '10m' }
+    );
+
+    res.json({
+      success: true,
+      message: 'Email verified successfully.',
+      email,
+      emailVerificationToken,
+    });
+  } catch (err) {
+    next(err);
+  }
 };
 
 // @POST /api/auth/login
@@ -81,13 +419,192 @@ exports.login = async (req, res, next) => {
     user.lastLogin = new Date();
     await user.save();
 
+    // Log activity for admin/supervisor logins
+    if (user.role === 'admin' || user.role === 'supervisor') {
+      await logActivity({
+        req,
+        adminId: user._id,
+        adminName: user.name,
+        adminEmail: user.email,
+        action: 'login',
+        targetType: 'auth',
+        status: 'success',
+      });
+    }
+
     logger.info(`User logged in: ${email}`);
     sendToken(user, 200, res);
   } catch (err) { next(err); }
 };
 
+// @GET /api/auth/google
+exports.googleOAuthStart = async (req, res, next) => {
+  try {
+    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+      return res.status(500).json({
+        success: false,
+        message: 'Google OAuth is not configured',
+      });
+    }
+
+    const mode = req.query.mode === 'register' ? 'register' : 'login';
+    const clientUrl = getClientUrl(req.query.clientUrl || req.get('origin') || req.get('referer'));
+    const state = signOAuthState({
+      mode,
+      clientUrl,
+      redirect: sanitizeRedirect(req.query.redirect),
+      exp: Date.now() + 10 * 60 * 1000,
+    });
+
+    const googleUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+    googleUrl.searchParams.set('client_id', process.env.GOOGLE_CLIENT_ID);
+    googleUrl.searchParams.set('redirect_uri', getGoogleRedirectUri());
+    googleUrl.searchParams.set('response_type', 'code');
+    googleUrl.searchParams.set('scope', 'openid email profile');
+    googleUrl.searchParams.set('prompt', 'select_account');
+    googleUrl.searchParams.set('state', state);
+
+    return res.redirect(googleUrl.toString());
+  } catch (err) {
+    next(err);
+  }
+};
+
+// @GET /api/auth/google/callback
+exports.googleOAuthCallback = async (req, res) => {
+  let state;
+  try {
+    state = verifyOAuthState(req.query.state);
+
+    if (req.query.error) {
+      return redirectWithOAuthError(res, 'Google sign-in was cancelled', state.clientUrl);
+    }
+
+    if (!req.query.code) {
+      throw new Error('Missing Google OAuth code');
+    }
+    const profile = await exchangeGoogleCode(req.query.code);
+    const user = await findOrCreateGoogleUser(profile);
+
+    logger.info(`Google OAuth ${state.mode}: ${user.email}`);
+    return redirectWithOAuthToken(user, state, res);
+  } catch (err) {
+    logger.error(`Google OAuth failed: ${err.message}`);
+    return redirectWithOAuthError(res, 'Google sign-in failed. Please try again.', state?.clientUrl);
+  }
+};
+
+// @POST /api/auth/phone-otp/send
+exports.sendPhoneOtp = async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    clearExpiredPhoneOtps();
+
+    const { phone } = req.body;
+    if (phone !== TEST_OTP_PHONE) {
+      return res.status(400).json({
+        success: false,
+        message: 'Testing OTP is available only for phone number 9999999999.',
+      });
+    }
+
+    const otp = '123456';
+    const verificationId = crypto.randomUUID();
+
+    phoneOtpChallenges.set(verificationId, {
+      userId: req.user.id.toString(),
+      phone,
+      otpHash: hashOtp(otp),
+      expiresAt: Date.now() + PHONE_OTP_TTL_MS,
+      attempts: 0,
+    });
+
+    res.json({
+      success: true,
+      message: 'Testing OTP generated.',
+      verificationId,
+      devOtp: otp,
+      expiresInSeconds: PHONE_OTP_TTL_MS / 1000,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// @POST /api/auth/phone-otp/verify
+exports.verifyPhoneOtp = async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const { phone, otp, verificationId } = req.body;
+    const challenge = phoneOtpChallenges.get(verificationId);
+
+    if (!challenge || challenge.expiresAt <= Date.now()) {
+      phoneOtpChallenges.delete(verificationId);
+      return res.status(400).json({ success: false, message: 'OTP expired. Please request a new OTP.' });
+    }
+
+    if (challenge.userId !== req.user.id.toString() || challenge.phone !== phone) {
+      return res.status(400).json({ success: false, message: 'OTP verification does not match this phone number.' });
+    }
+
+    if (challenge.attempts >= PHONE_OTP_MAX_ATTEMPTS) {
+      phoneOtpChallenges.delete(verificationId);
+      return res.status(400).json({ success: false, message: 'Too many OTP attempts. Please request a new OTP.' });
+    }
+
+    challenge.attempts += 1;
+
+    if (challenge.otpHash !== hashOtp(otp)) {
+      return res.status(400).json({ success: false, message: 'Invalid OTP. Please check and try again.' });
+    }
+
+    phoneOtpChallenges.delete(verificationId);
+
+    const phoneVerificationToken = jwt.sign(
+      { id: req.user.id, phone, purpose: 'checkout_phone_test' },
+      process.env.JWT_SECRET,
+      { expiresIn: '3m' }
+    );
+
+    res.json({
+      success: true,
+      message: 'Phone number verified successfully.',
+      phone,
+      phoneVerificationToken,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // @POST /api/auth/logout
-exports.logout = (req, res) => {
+exports.logout = async (req, res) => {
+  try {
+    // Log activity for admin/supervisor logouts
+    if (req.user && (req.user.role === 'admin' || req.user.role === 'supervisor')) {
+      await logActivity({
+        req,
+        adminId: req.user._id,
+        adminName: req.user.name,
+        adminEmail: req.user.email,
+        action: 'logout',
+        targetType: 'auth',
+        status: 'success',
+      });
+    }
+  } catch (err) {
+    // Don't fail logout if logging fails
+    console.error('Error logging logout:', err);
+  }
+
   res.cookie('token', '', { expires: new Date(0), httpOnly: true });
   res.json({ success: true, message: 'Logged out successfully' });
 };

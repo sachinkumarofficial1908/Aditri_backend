@@ -13,15 +13,16 @@ const storage = multer.diskStorage({
 });
 
 const fileFilter = (req, file, cb) => {
+  const ext = path.extname(file.originalname).toLowerCase();
   const allowed = [
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     'application/vnd.ms-excel',
   ];
 
-  if (allowed.includes(file.mimetype) || file.originalname.endsWith('.xlsx') || file.originalname.endsWith('.xls')) {
+  if (allowed.includes(file.mimetype) || ['.xlsx', '.xls'].includes(ext)) {
     cb(null, true);
   } else {
-    cb(new Error('Only Excel files are allowed'));
+    cb(new Error('Only Excel files with .xlsx or .xls extensions are allowed'));
   }
 };
 

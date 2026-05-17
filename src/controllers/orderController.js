@@ -1,7 +1,12 @@
 'use strict';
+const jwt = require('jsonwebtoken');
 const Order = require('../models/Order');
 const Product = require('../models/Product');
+const User = require('../models/User');
 const { validationResult } = require('express-validator');
+const firebaseAdmin = require('../config/firebaseAdmin');
+
+const TEST_OTP_PHONE = '9999999999';
 
 // @POST /api/orders
 exports.createOrder = async (req, res, next) => {
@@ -9,7 +14,38 @@ exports.createOrder = async (req, res, next) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
 
-    const { items, shippingAddress, paymentMethod, guestInfo, notes } = req.body;
+    const { items, shippingAddress, paymentMethod, guestInfo, notes, phoneVerificationToken } = req.body;
+
+    let verifiedPhone;
+    try {
+      if (shippingAddress.phone === TEST_OTP_PHONE) {
+        const decoded = jwt.verify(phoneVerificationToken, process.env.JWT_SECRET);
+        if (
+          decoded.purpose !== 'checkout_phone_test' ||
+          decoded.id !== req.user.id.toString() ||
+          decoded.phone !== shippingAddress.phone
+        ) {
+          throw new Error('Test phone verification mismatch');
+        }
+        verifiedPhone = decoded.phone;
+      } else {
+        const decoded = await firebaseAdmin.auth().verifyIdToken(phoneVerificationToken);
+        const firebasePhone = decoded.phone_number?.replace(/^\+91/, '');
+        if (!firebasePhone || firebasePhone !== shippingAddress.phone) {
+          throw new Error('Phone verification mismatch');
+        }
+        verifiedPhone = firebasePhone;
+      }
+
+      if (!verifiedPhone) {
+        throw new Error('Phone verification mismatch');
+      }
+    } catch {
+      return res.status(400).json({
+        success: false,
+        message: 'Please verify your delivery phone number before placing the order.',
+      });
+    }
 
     // Validate stock and compute totals
     let subtotal = 0;
@@ -17,7 +53,12 @@ exports.createOrder = async (req, res, next) => {
     for (const item of items) {
       const product = await Product.findById(item.product);
       if (!product || !product.isActive) {
-        return res.status(400).json({ success: false, message: `Product ${item.product} not found` });
+        return res.status(400).json({
+          success: false,
+          code: 'PRODUCT_UNAVAILABLE',
+          message: 'One or more products in your cart are no longer available. Please remove them and add current products again.',
+          invalidProducts: [item.product],
+        });
       }
       if (product.stock < item.qty) {
         return res.status(400).json({ success: false, message: `Insufficient stock for ${product.name}` });
@@ -33,7 +74,7 @@ exports.createOrder = async (req, res, next) => {
 
     const orderData = {
       items: validatedItems,
-      shippingAddress,
+      shippingAddress: { ...shippingAddress, phone: verifiedPhone },
       paymentMethod: paymentMethod || 'cod',
       subtotal,
       tax,
@@ -44,11 +85,11 @@ exports.createOrder = async (req, res, next) => {
 
     if (req.user) {
       orderData.user = req.user.id;
-    } else {
-      orderData.guestInfo = guestInfo;
     }
 
     const order = await Order.create(orderData);
+
+    await User.findByIdAndUpdate(req.user.id, { phone: verifiedPhone }, { runValidators: true });
 
     // Deduct stock
     for (const item of validatedItems) {

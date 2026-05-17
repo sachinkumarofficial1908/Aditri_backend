@@ -1,6 +1,7 @@
 'use strict';
 const { validationResult } = require('express-validator');
 const Employee = require('../models/Employee');
+const { logActivity } = require('../middleware/activityLogger');
 
 const buildUpdateData = (body) => {
   const allowed = [
@@ -27,8 +28,10 @@ const buildUpdateData = (body) => {
     'designation',
     'gradeOfWork',
     'dailyWagesRate',
-    'photoUrl',
+    'govDailyWage',
+    'photoPath',
     'clmsId',
+    'status',
   ];
 
   return allowed.reduce((acc, key) => {
@@ -79,7 +82,35 @@ exports.createEmployee = async (req, res, next) => {
     }
 
     const data = buildUpdateData(req.body);
+    
+    // Convert date fields to proper Date objects
+    if (data.dob && typeof data.dob === 'string') {
+      data.dob = new Date(data.dob);
+    }
+    if (data.dateOfJoining && typeof data.dateOfJoining === 'string') {
+      data.dateOfJoining = new Date(data.dateOfJoining);
+    }
+    
+    // Add photo path if file was uploaded
+    if (req.file) {
+      data.photoPath = `/uploads/photos/${req.file.filename}`;
+    }
+
     const employee = await Employee.create({ ...data, createdBy: req.user._id });
+    
+    // Log activity
+    await logActivity({
+      req,
+      adminId: req.user._id,
+      adminName: req.user.name,
+      adminEmail: req.user.email,
+      action: 'employee_create',
+      targetType: 'employee',
+      targetId: employee._id,
+      targetName: employee.name,
+      details: { employeeId: employee.employeeId, designation: employee.designation },
+    });
+
     res.status(201).json({ success: true, employee });
   } catch (err) {
     if (err.code === 11000) {
@@ -98,11 +129,39 @@ exports.updateEmployee = async (req, res, next) => {
     }
 
     const updateData = buildUpdateData(req.body);
+    
+    // Convert date fields to proper Date objects
+    if (updateData.dob && typeof updateData.dob === 'string') {
+      updateData.dob = new Date(updateData.dob);
+    }
+    if (updateData.dateOfJoining && typeof updateData.dateOfJoining === 'string') {
+      updateData.dateOfJoining = new Date(updateData.dateOfJoining);
+    }
+    
+    // Add photo path if file was uploaded
+    if (req.file) {
+      updateData.photoPath = `/uploads/photos/${req.file.filename}`;
+    }
+
     const employee = await Employee.findByIdAndUpdate(req.params.id, updateData, {
       new: true,
       runValidators: true,
     });
     if (!employee) return res.status(404).json({ success: false, message: 'Employee not found' });
+    
+    // Log activity
+    await logActivity({
+      req,
+      adminId: req.user._id,
+      adminName: req.user.name,
+      adminEmail: req.user.email,
+      action: 'employee_update',
+      targetType: 'employee',
+      targetId: employee._id,
+      targetName: employee.name,
+      details: { employeeId: employee.employeeId, updatedFields: Object.keys(updateData) },
+    });
+
     res.json({ success: true, employee });
   } catch (err) {
     if (err.code === 11000) {
@@ -117,6 +176,20 @@ exports.deleteEmployee = async (req, res, next) => {
   try {
     const employee = await Employee.findByIdAndDelete(req.params.id);
     if (!employee) return res.status(404).json({ success: false, message: 'Employee not found' });
+    
+    // Log activity
+    await logActivity({
+      req,
+      adminId: req.user._id,
+      adminName: req.user.name,
+      adminEmail: req.user.email,
+      action: 'employee_delete',
+      targetType: 'employee',
+      targetId: req.params.id,
+      targetName: employee.name,
+      details: { employeeId: employee.employeeId, designation: employee.designation },
+    });
+
     res.json({ success: true, message: 'Employee deleted' });
   } catch (err) { next(err); }
 };
@@ -125,9 +198,24 @@ exports.terminateEmployee = async (req, res, next) => {
   try {
     const employee = await Employee.findById(req.params.id);
     if (!employee) return res.status(404).json({ success: false, message: 'Employee not found' });
-    employee.status = 'Terminated';
+    const oldStatus = employee.status;
+    employee.status = 'Terminate';
     employee.terminatedAt = new Date();
     await employee.save();
+    
+    // Log activity
+    await logActivity({
+      req,
+      adminId: req.user._id,
+      adminName: req.user.name,
+      adminEmail: req.user.email,
+      action: 'employee_status_change',
+      targetType: 'employee',
+      targetId: employee._id,
+      targetName: employee.name,
+      details: { employeeId: employee.employeeId, oldStatus, newStatus: employee.status },
+    });
+
     res.json({ success: true, employee });
   } catch (err) { next(err); }
 };

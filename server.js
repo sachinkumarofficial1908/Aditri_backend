@@ -29,6 +29,11 @@ const wageSlipRoutes = require('./src/routes/wageSlipRoutes');
 const musterRoutes = require('./src/routes/muster');
 const attendanceRoutes = require('./src/routes/attendance');
 const employeeRoutes = require('./src/routes/employees');
+const activityLogsRoutes = require('./src/routes/activityLogs');
+const salaryRoutes = require('./src/routes/salary');
+const excelUploadRoutes = require('./src/routes/excelUpload');
+const reportRoutes = require('./src/routes/reports');
+const paymentReceiptRoutes = require('./src/routes/paymentReceiptRoutes');
 
 // Connect Database
 connectDB();
@@ -131,8 +136,17 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/employees', employeeRoutes);
 app.use('/api/muster', musterRoutes);
 app.use('/api/attendance', attendanceRoutes);
+app.use('/api/salary', salaryRoutes);
+app.use('/api/excel', excelUploadRoutes);
+app.use('/api/receipts', paymentReceiptRoutes);
+app.use('/api/reports', reportRoutes);
 app.use('/api/wage-slips', wageSlipRoutes);
+app.use('/api/activity-logs', activityLogsRoutes);
 app.use('/api/upload', uploadRoutes);
+
+// Compatibility for older frontend chunks that accidentally prefixed /api twice.
+app.use('/api/api/salary', salaryRoutes);
+app.use('/api/api/attendance', attendanceRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

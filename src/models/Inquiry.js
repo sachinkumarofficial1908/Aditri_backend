@@ -4,7 +4,9 @@ const mongoose = require('mongoose');
 const inquirySchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true, maxlength: 100 },
   email: { type: String, required: true, lowercase: true, match: [/^\S+@\S+\.\S+$/, 'Invalid email'] },
+  user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   phone: { type: String, trim: true, maxlength: 15 },
+  pincode: { type: String, trim: true, maxlength: 6 },
   company: { type: String, trim: true, maxlength: 200 },
   subject: { type: String, required: true, maxlength: 200 },
   message: { type: String, required: true, maxlength: 2000 },
