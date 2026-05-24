@@ -35,11 +35,12 @@ const hashOtp = (otp) => crypto.createHash('sha256').update(otp).digest('hex');
 
 const getSmtpConfig = () => {
   const port = parseInt(process.env.SMTP_PORT, 10) || 587;
+  const user = (process.env.SMTP_EMAIL || '').trim();
   return {
-    host: (process.env.SMTP_HOST || '').trim(),
+    host: (process.env.SMTP_HOST || '').trim() || (user.endsWith('@gmail.com') ? 'smtp.gmail.com' : ''),
     port,
     secure: port === 465,
-    user: (process.env.SMTP_EMAIL || '').trim(),
+    user,
     pass: (process.env.SMTP_PASSWORD || '').replace(/\s+/g, ''),
     fromEmail: (process.env.FROM_EMAIL || process.env.SMTP_EMAIL || '').trim(),
     fromName: (process.env.FROM_NAME || 'Aditri Constructions Services').trim(),
@@ -128,7 +129,9 @@ const normalizeOrigin = (value) => {
 const getAllowedClientOrigins = () => {
   const configured = [
     process.env.CLIENT_URL,
+    process.env.FRONTEND_URL,
     ...(process.env.OAUTH_ALLOWED_CLIENT_URLS || '').split(','),
+    ...(process.env.CORS_ORIGINS || '').split(','),
     'http://localhost:5173',
     'http://localhost:3000',
     'https://aditri-frontend2.vercel.app',

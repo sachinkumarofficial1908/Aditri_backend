@@ -34,6 +34,7 @@ const salaryRoutes = require('./src/routes/salary');
 const excelUploadRoutes = require('./src/routes/excelUpload');
 const reportRoutes = require('./src/routes/reports');
 const paymentReceiptRoutes = require('./src/routes/paymentReceiptRoutes');
+const { getUploadDir } = require('./src/utils/uploadPath');
 
 // Connect Database
 connectDB();
@@ -124,7 +125,7 @@ if (process.env.NODE_ENV === 'development') {
 }
 
 // Static files (uploads)
-app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
+app.use('/uploads', express.static(getUploadDir(), {
   maxAge: '1d',
   setHeaders: (res, path) => {
     if (path.endsWith('.svg')) {

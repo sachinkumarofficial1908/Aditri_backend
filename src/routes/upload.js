@@ -5,8 +5,9 @@ const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const { protect, adminOnly } = require('../middleware/auth');
+const { getUploadDir } = require('../utils/uploadPath');
 
-const uploadDir = process.env.UPLOAD_PATH || './uploads';
+const uploadDir = getUploadDir();
 const maxFileSize = parseInt(process.env.MAX_FILE_SIZE, 10) || 10 * 1024 * 1024;
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
