@@ -21,6 +21,7 @@ const productSchema = new mongoose.Schema({
   shortDescription: { type: String, maxlength: 500 },
   price: { type: Number, required: true, min: 0 },
   discountPrice: { type: Number, min: 0, default: 0 },
+  gstRate: { type: Number, min: 0, max: 100, default: 18 },
   category: { type: String, required: true, enum: CATEGORIES },
   subcategory: { type: String, enum: SUBCATEGORIES },
   stock: { type: Number, default: 0, min: 0 },

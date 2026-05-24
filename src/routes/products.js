@@ -11,6 +11,7 @@ const productValidation = [
   body('name').trim().notEmpty().withMessage('Product name required').isLength({ max: 250 }),
   body('description').trim().notEmpty().withMessage('Description required'),
   body('price').isFloat({ min: 0 }).withMessage('Valid price required'),
+  body('gstRate').optional().isFloat({ min: 0, max: 100 }).withMessage('GST must be between 0 and 100'),
   body('category').notEmpty().withMessage('Category required'),
   body('stock').isInt({ min: 0 }).withMessage('Valid stock required'),
 ];

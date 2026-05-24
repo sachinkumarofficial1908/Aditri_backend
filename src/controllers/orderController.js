@@ -7,6 +7,12 @@ const { validationResult } = require('express-validator');
 const firebaseAdmin = require('../config/firebaseAdmin');
 
 const TEST_OTP_PHONE = '9999999999';
+const DEFAULT_GST_RATE = 18;
+
+const getGstRate = (product) => {
+  const gstRate = Number(product.gstRate);
+  return Number.isFinite(gstRate) && gstRate >= 0 ? gstRate : DEFAULT_GST_RATE;
+};
 
 // @POST /api/orders
 exports.createOrder = async (req, res, next) => {
@@ -49,6 +55,7 @@ exports.createOrder = async (req, res, next) => {
 
     // Validate stock and compute totals
     let subtotal = 0;
+    let tax = 0;
     const validatedItems = [];
     for (const item of items) {
       const product = await Product.findById(item.product);
@@ -64,11 +71,22 @@ exports.createOrder = async (req, res, next) => {
         return res.status(400).json({ success: false, message: `Insufficient stock for ${product.name}` });
       }
       const price = product.discountPrice || product.price;
-      subtotal += price * item.qty;
-      validatedItems.push({ product: product._id, name: product.name, qty: item.qty, price, image: product.images?.[0]?.url });
+      const lineSubtotal = price * item.qty;
+      const gstRate = getGstRate(product);
+      const gstAmount = Math.round((lineSubtotal * gstRate) / 100);
+      subtotal += lineSubtotal;
+      tax += gstAmount;
+      validatedItems.push({
+        product: product._id,
+        name: product.name,
+        qty: item.qty,
+        price,
+        gstRate,
+        gstAmount,
+        image: product.images?.[0]?.url,
+      });
     }
 
-    const tax = Math.round(subtotal * 0.18);
     const shippingCost = subtotal > 10000 ? 0 : 200;
     const total = subtotal + tax + shippingCost;
 

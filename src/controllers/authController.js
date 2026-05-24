@@ -67,6 +67,12 @@ const sendEmail = async ({ to, subject, html }) => {
   });
 };
 
+const getResetPasswordUrl = (req, token) => {
+  const clientUrl = getClientUrl(req.body.clientUrl || req.get('origin') || req.get('referer'));
+  const resetUrl = new URL(`/reset-password/${token}`, clientUrl);
+  return resetUrl.toString();
+};
+
 const clearExpiredPhoneOtps = () => {
   const now = Date.now();
   for (const [id, challenge] of phoneOtpChallenges.entries()) {
@@ -451,6 +457,91 @@ exports.login = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+// @POST /api/auth/forgot-password
+exports.forgotPassword = async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const email = req.body.email.toLowerCase();
+    const user = await User.findOne({ email });
+    const genericResponse = {
+      success: true,
+      message: 'If an account exists for this email, a reset link has been sent.',
+    };
+
+    if (!user) {
+      return res.json(genericResponse);
+    }
+
+    const resetToken = user.getResetToken();
+    await user.save({ validateBeforeSave: false });
+
+    try {
+      const resetUrl = getResetPasswordUrl(req, resetToken);
+      await sendEmail({
+        to: user.email,
+        subject: 'Reset your Aditri password',
+        html: `<h3>Password Reset</h3>
+          <p>Use the link below to reset your Aditri account password.</p>
+          <p><a href="${resetUrl}">Reset password</a></p>
+          <p>This link expires in 10 minutes. If you did not request this, you can ignore this email.</p>`,
+      });
+    } catch (err) {
+      user.resetPasswordToken = undefined;
+      user.resetPasswordExpire = undefined;
+      await user.save({ validateBeforeSave: false });
+      logger.error(`Forgot password email failed: ${err.message}`);
+      return res.status(500).json({
+        success: false,
+        message: 'Unable to send reset email. Check SMTP/Gmail app password settings.',
+      });
+    }
+
+    res.json(genericResponse);
+  } catch (err) {
+    next(err);
+  }
+};
+
+// @PUT /api/auth/reset-password/:token
+exports.resetPassword = async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const resetPasswordToken = crypto
+      .createHash('sha256')
+      .update(req.params.token)
+      .digest('hex');
+
+    const user = await User.findOne({
+      resetPasswordToken,
+      resetPasswordExpire: { $gt: Date.now() },
+    }).select('+password +resetPasswordToken +resetPasswordExpire');
+
+    if (!user) {
+      return res.status(400).json({ success: false, message: 'Password reset link is invalid or expired.' });
+    }
+
+    user.password = req.body.password;
+    user.authProvider = 'local';
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpire = undefined;
+    user.loginAttempts = 0;
+    user.lockUntil = undefined;
+    await user.save();
+
+    sendToken(user, 200, res);
+  } catch (err) {
+    next(err);
+  }
+};
+
 // @GET /api/auth/google
 exports.googleOAuthStart = async (req, res, next) => {
   try {
@@ -629,31 +720,46 @@ exports.logout = async (req, res) => {
 exports.getMe = async (req, res, next) => {
   try {
     const user = await User.findById(req.user.id);
-    res.json({ success: true, user });
+    res.json({ success: true, user: getSafeUser(user) });
   } catch (err) { next(err); }
 };
 
 // @PUT /api/auth/update-profile
 exports.updateProfile = async (req, res, next) => {
   try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
     const { name, phone } = req.body;
     const user = await User.findByIdAndUpdate(
       req.user.id,
       { name, phone },
       { new: true, runValidators: true }
     );
-    res.json({ success: true, user });
+    res.json({ success: true, user: getSafeUser(user) });
   } catch (err) { next(err); }
 };
 
 // @PUT /api/auth/change-password
 exports.changePassword = async (req, res, next) => {
   try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
     const { currentPassword, newPassword } = req.body;
     const user = await User.findById(req.user.id).select('+password');
+
+    if (!user.password) {
+      return res.status(400).json({ success: false, message: 'This account does not have a local password yet. Use forgot password to set one.' });
+    }
+
     const isMatch = await user.matchPassword(currentPassword);
     if (!isMatch) {
-      return res.status(401).json({ success: false, message: 'Current password is incorrect' });
+      return res.status(400).json({ success: false, message: 'Current password is incorrect' });
     }
     user.password = newPassword;
     await user.save();

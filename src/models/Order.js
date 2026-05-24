@@ -6,6 +6,8 @@ const orderItemSchema = new mongoose.Schema({
   name: { type: String, required: true },
   qty: { type: Number, required: true, min: 1 },
   price: { type: Number, required: true },
+  gstRate: { type: Number, min: 0, max: 100 },
+  gstAmount: { type: Number, min: 0 },
   image: String,
 });
 

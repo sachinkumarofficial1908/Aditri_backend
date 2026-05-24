@@ -50,8 +50,8 @@ const userSchema = new mongoose.Schema({
   lastLogin: { type: Date },
   loginAttempts: { type: Number, default: 0 },
   lockUntil: { type: Date },
-  resetPasswordToken: String,
-  resetPasswordExpire: Date,
+  resetPasswordToken: { type: String, select: false },
+  resetPasswordExpire: { type: Date, select: false },
 }, { timestamps: true });
 
 // ─── Pre-save password hash ────────────────────────────────────────────────────

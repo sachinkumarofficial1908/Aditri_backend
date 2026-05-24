@@ -2,6 +2,12 @@
 const Product = require('../models/Product');
 const { validationResult } = require('express-validator');
 
+const DEFAULT_GST_RATE = 18;
+const withDefaultGstRate = (product) => ({
+  ...product,
+  gstRate: product.gstRate ?? DEFAULT_GST_RATE,
+});
+
 // @GET /api/products
 exports.getProducts = async (req, res, next) => {
   try {
@@ -37,7 +43,7 @@ exports.getProducts = async (req, res, next) => {
       total,
       pages: Math.ceil(total / parseInt(limit)),
       currentPage: parseInt(page),
-      products,
+      products: products.map(withDefaultGstRate),
     });
   } catch (err) { next(err); }
 };
@@ -47,7 +53,7 @@ exports.getProduct = async (req, res, next) => {
   try {
     const product = await Product.findOne({ _id: req.params.id, isActive: true });
     if (!product) return res.status(404).json({ success: false, message: 'Product not found' });
-    res.json({ success: true, product });
+    res.json({ success: true, product: withDefaultGstRate(product.toObject()) });
   } catch (err) { next(err); }
 };
 
