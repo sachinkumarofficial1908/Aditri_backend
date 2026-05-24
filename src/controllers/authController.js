@@ -36,6 +36,7 @@ const hashOtp = (otp) => crypto.createHash('sha256').update(otp).digest('hex');
 const getSmtpConfig = () => {
   const port = parseInt(process.env.SMTP_PORT, 10) || 587;
   const user = (process.env.SMTP_EMAIL || '').trim();
+  const timeoutMs = parseInt(process.env.SMTP_TIMEOUT_MS, 10) || 12000;
   return {
     host: (process.env.SMTP_HOST || '').trim() || (user.endsWith('@gmail.com') ? 'smtp.gmail.com' : ''),
     port,
@@ -44,13 +45,48 @@ const getSmtpConfig = () => {
     pass: (process.env.SMTP_PASSWORD || '').replace(/\s+/g, ''),
     fromEmail: (process.env.FROM_EMAIL || process.env.SMTP_EMAIL || '').trim(),
     fromName: (process.env.FROM_NAME || 'Aditri Constructions Services').trim(),
+    timeoutMs,
   };
 };
 
 const sendEmail = async ({ to, subject, html }) => {
   const smtp = getSmtpConfig();
+  if (process.env.RESEND_API_KEY) {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: `"${smtp.fromName}" <${smtp.fromEmail}>`,
+        to: [to],
+        subject,
+        html,
+      }),
+    });
+
+    if (!response.ok) {
+      let detail = '';
+      try {
+        const data = await response.json();
+        detail = data?.message || data?.error || JSON.stringify(data);
+      } catch {
+        detail = await response.text();
+      }
+      const error = new Error(detail || 'Resend email API failed');
+      error.code = 'EMAIL_API_FAILED';
+      throw error;
+    }
+
+    return;
+  }
+
   if (!smtp.user || !smtp.pass) {
     throw new Error('Email service is not configured. Check SMTP_EMAIL and SMTP_PASSWORD.');
+  }
+  if (!smtp.host) {
+    throw new Error('Email service is not configured. Check SMTP_HOST or use a Gmail SMTP_EMAIL.');
   }
 
   const transporter = nodemailer.createTransport({
@@ -58,6 +94,10 @@ const sendEmail = async ({ to, subject, html }) => {
     port: smtp.port,
     secure: smtp.secure,
     auth: { user: smtp.user, pass: smtp.pass },
+    connectionTimeout: smtp.timeoutMs,
+    greetingTimeout: smtp.timeoutMs,
+    socketTimeout: smtp.timeoutMs,
+    dnsTimeout: smtp.timeoutMs,
   });
 
   await transporter.sendMail({
@@ -66,6 +106,22 @@ const sendEmail = async ({ to, subject, html }) => {
     subject,
     html,
   });
+};
+
+const getEmailErrorMessage = (err) => {
+  if (err?.code === 'EMAIL_API_FAILED') {
+    return `Email API failed: ${err.message}`;
+  }
+  if (err?.code === 'EAUTH') {
+    return 'Email login failed. Use a valid Gmail App Password in SMTP_PASSWORD.';
+  }
+  if (['ETIMEDOUT', 'ESOCKET', 'ECONNECTION'].includes(err?.code)) {
+    return 'Email server connection timed out. Check SMTP_HOST, SMTP_PORT, and Render network access.';
+  }
+  if (/not configured/i.test(err?.message || '')) {
+    return err.message;
+  }
+  return 'Unable to send reset email. Check SMTP/Gmail app password settings.';
 };
 
 const getResetPasswordUrl = (req, token) => {
@@ -496,10 +552,10 @@ exports.forgotPassword = async (req, res, next) => {
       user.resetPasswordToken = undefined;
       user.resetPasswordExpire = undefined;
       await user.save({ validateBeforeSave: false });
-      logger.error(`Forgot password email failed: ${err.message}`);
+      logger.error(`Forgot password email failed: ${err.code || 'NO_CODE'} ${err.message}`);
       return res.status(500).json({
         success: false,
-        message: 'Unable to send reset email. Check SMTP/Gmail app password settings.',
+        message: getEmailErrorMessage(err),
       });
     }
 
