@@ -50,10 +50,6 @@ const uploadBufferToCloudinary = (file, { folder } = {}) => new Promise((resolve
     unique_filename: true,
   };
 
-  if (process.env.CLOUDINARY_UPLOAD_PRESET) {
-    uploadOptions.upload_preset = process.env.CLOUDINARY_UPLOAD_PRESET;
-  }
-
   const stream = cloudinary.uploader.upload_stream(uploadOptions, (error, result) => {
     if (error) return reject(error);
     return resolve(result);
