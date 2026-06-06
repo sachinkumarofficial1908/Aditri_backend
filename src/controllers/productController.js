@@ -1,12 +1,65 @@
 'use strict';
 const Product = require('../models/Product');
 const { validationResult } = require('express-validator');
+const { destroyCloudinaryAsset } = require('../config/cloudinary');
 
 const DEFAULT_GST_RATE = 18;
 const withDefaultGstRate = (product) => ({
   ...product,
   gstRate: product.gstRate ?? DEFAULT_GST_RATE,
 });
+
+const cleanupCloudinaryAsset = async (publicId) => {
+  try {
+    await destroyCloudinaryAsset(publicId);
+  } catch (err) {
+    // Product image removal should remain saved even if remote cleanup retries are needed later.
+  }
+};
+
+const cleanupUploadedImages = async (images = []) => {
+  await Promise.allSettled(images.map((image) => destroyCloudinaryAsset(image.public_id)));
+};
+
+const getUploadedImages = (req) => (req.files || []).map((file) => ({
+  url: file.cloudinary.secure_url,
+  alt: file.originalname,
+  public_id: file.cloudinary.public_id,
+}));
+
+const parseJsonField = (value, fallback) => {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (typeof value !== 'string') return value;
+
+  try {
+    return JSON.parse(value);
+  } catch (err) {
+    return fallback;
+  }
+};
+
+const buildProductData = (body, uploadedImages = []) => {
+  const data = { ...body };
+
+  if (Object.prototype.hasOwnProperty.call(data, 'images')) {
+    data.images = parseJsonField(data.images, []);
+  }
+  if (Object.prototype.hasOwnProperty.call(data, 'specifications')) {
+    data.specifications = parseJsonField(data.specifications, []);
+  }
+  if (Object.prototype.hasOwnProperty.call(data, 'tags')) {
+    data.tags = Array.isArray(data.tags)
+      ? data.tags
+      : parseJsonField(data.tags, String(data.tags).split(',').map((tag) => tag.trim()).filter(Boolean));
+  }
+
+  if (uploadedImages.length) {
+    const existingImages = Array.isArray(data.images) ? data.images : [];
+    data.images = [...existingImages, ...uploadedImages];
+  }
+
+  return data;
+};
 
 // @GET /api/products
 exports.getProducts = async (req, res, next) => {
@@ -59,23 +112,39 @@ exports.getProduct = async (req, res, next) => {
 
 // @POST /api/products (admin)
 exports.createProduct = async (req, res, next) => {
+  const uploadedImages = getUploadedImages(req);
   try {
     const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
-    const product = await Product.create({ ...req.body, createdBy: req.user.id });
+    if (!errors.isEmpty()) {
+      await cleanupUploadedImages(uploadedImages);
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const product = await Product.create({ ...buildProductData(req.body, uploadedImages), createdBy: req.user.id });
     res.status(201).json({ success: true, product });
-  } catch (err) { next(err); }
+  } catch (err) {
+    await cleanupUploadedImages(uploadedImages);
+    next(err);
+  }
 };
 
 // @PUT /api/products/:id (admin)
 exports.updateProduct = async (req, res, next) => {
+  const uploadedImages = getUploadedImages(req);
   try {
+    const data = buildProductData(req.body, uploadedImages);
     const product = await Product.findByIdAndUpdate(
-      req.params.id, req.body, { new: true, runValidators: true }
+      req.params.id, data, { new: true, runValidators: true }
     );
-    if (!product) return res.status(404).json({ success: false, message: 'Product not found' });
+    if (!product) {
+      await cleanupUploadedImages(uploadedImages);
+      return res.status(404).json({ success: false, message: 'Product not found' });
+    }
     res.json({ success: true, product });
-  } catch (err) { next(err); }
+  } catch (err) {
+    await cleanupUploadedImages(uploadedImages);
+    next(err);
+  }
 };
 
 // @DELETE /api/products/:id (admin)
@@ -111,17 +180,24 @@ exports.getCategories = async (req, res, next) => {
 
 // @POST /api/products/:id/images (admin) — add images to existing product
 exports.addImages = async (req, res, next) => {
+  const uploadedImages = getUploadedImages(req);
   try {
-    const { images } = req.body; // [{ url, alt }]
+    const images = uploadedImages.length ? uploadedImages : parseJsonField(req.body.images, []);
     if (!images?.length) return res.status(400).json({ success: false, message: 'No images provided' });
     const product = await Product.findByIdAndUpdate(
       req.params.id,
       { $push: { images: { $each: images } } },
       { new: true }
     );
-    if (!product) return res.status(404).json({ success: false, message: 'Product not found' });
+    if (!product) {
+      await cleanupUploadedImages(uploadedImages);
+      return res.status(404).json({ success: false, message: 'Product not found' });
+    }
     res.json({ success: true, product });
-  } catch (err) { next(err); }
+  } catch (err) {
+    await cleanupUploadedImages(uploadedImages);
+    next(err);
+  }
 };
 
 // @DELETE /api/products/:id/images/:imgIndex (admin) — remove one image
@@ -133,8 +209,9 @@ exports.removeImage = async (req, res, next) => {
     if (idx < 0 || idx >= product.images.length) {
       return res.status(400).json({ success: false, message: 'Invalid image index' });
     }
-    product.images.splice(idx, 1);
+    const [removedImage] = product.images.splice(idx, 1);
     await product.save();
+    await cleanupCloudinaryAsset(removedImage?.public_id);
     res.json({ success: true, product });
   } catch (err) { next(err); }
 };

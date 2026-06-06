@@ -13,12 +13,16 @@ class SalaryGenerationController {
   static async enrichSalaryRows(salaries) {
     return Promise.all(
       salaries.map(async (salary) => {
-        const employee = await Employee.findById(salary.employee_id);
+        const employeeId = salary.employee_id?._id || salary.employee_id;
+        const employee = await Employee.findById(employeeId).populate('supervisor_id', 'name email');
         return {
           ...salary.toObject(),
           employee_details: {
             name: employee?.name,
             clmsId: employee?.clmsId,
+            supervisorId: employee?.supervisor_id?._id?.toString() || 'unassigned',
+            supervisorName: employee?.supervisor_id?.name || 'Unassigned',
+            supervisorEmail: employee?.supervisor_id?.email || '',
           },
         };
       })
@@ -385,8 +389,9 @@ class SalaryGenerationController {
       const updates = req.body;
 
       const salary = await SalaryGenerationService.updateGovSalary(id, updates);
+      const enrichedSalary = (await SalaryGenerationController.enrichSalaryRows([salary]))[0];
 
-      return successResponse(res, salary, 'Government salary updated successfully');
+      return successResponse(res, enrichedSalary, 'Government salary updated successfully');
     } catch (error) {
       next(error);
     }
@@ -401,8 +406,9 @@ class SalaryGenerationController {
       const updates = req.body;
 
       const salary = await SalaryGenerationService.updateCompanySalary(id, updates);
+      const enrichedSalary = (await SalaryGenerationController.enrichSalaryRows([salary]))[0];
 
-      return successResponse(res, salary, 'Company salary updated successfully');
+      return successResponse(res, enrichedSalary, 'Company salary updated successfully');
     } catch (error) {
       next(error);
     }

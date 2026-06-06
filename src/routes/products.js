@@ -6,6 +6,7 @@ const {
   deleteProduct, getCategories, addImages, removeImage,
 } = require('../controllers/productController');
 const { protect, adminOnly } = require('../middleware/auth');
+const { uploadMultipleImages } = require('../middleware/cloudinaryUpload');
 
 const productValidation = [
   body('name').trim().notEmpty().withMessage('Product name required').isLength({ max: 250 }),
@@ -16,13 +17,16 @@ const productValidation = [
   body('stock').isInt({ min: 0 }).withMessage('Valid stock required'),
 ];
 
+const productImageUpload = uploadMultipleImages('images', { folder: 'products', maxFiles: 5 });
+
 router.get('/', getProducts);
+router.get('/categories', getCategories);
 router.get('/meta/categories', getCategories);
 router.get('/:id', getProduct);
-router.post('/', protect, adminOnly, productValidation, createProduct);
-router.put('/:id', protect, adminOnly, updateProduct);
+router.post('/', protect, adminOnly, productImageUpload, productValidation, createProduct);
+router.put('/:id', protect, adminOnly, productImageUpload, updateProduct);
 router.delete('/:id', protect, adminOnly, deleteProduct);
-router.post('/:id/images', protect, adminOnly, addImages);
+router.post('/:id/images', protect, adminOnly, productImageUpload, addImages);
 router.delete('/:id/images/:imgIndex', protect, adminOnly, removeImage);
 
 module.exports = router;

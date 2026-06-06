@@ -127,6 +127,10 @@ const employeeSchema = new mongoose.Schema({
     type: String,
     trim: true,
   },
+  photoPublicId: {
+    type: String,
+    trim: true,
+  },
   clmsId: {
     type: String,
     required: [true, 'CLMS ID is required'],

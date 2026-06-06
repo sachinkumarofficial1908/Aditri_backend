@@ -10,6 +10,13 @@ const SalaryGenerationService = require('../services/salaryGenerationService');
 const { successResponse } = require('../utils/responseHandler');
 const { AppError } = require('../utils/errorHandler');
 
+const scopeEmployeeQuery = (req, query = {}) => {
+  if (req.user?.role === 'supervisor') {
+    return { ...query, supervisor_id: req.user._id };
+  }
+  return query;
+};
+
 class ExcelUploadController {
   /**
    * Upload and validate attendance Excel
@@ -44,12 +51,12 @@ class ExcelUploadController {
       for (const entry of entries) {
         try {
           // Find employee by CLMS ID
-          const employee = await Employee.findOne({ clmsId: entry.clmsId });
+          const employee = await Employee.findOne(scopeEmployeeQuery(req, { clmsId: entry.clmsId }));
 
           if (!employee) {
             validationErrors.push({
               clmsId: entry.clmsId,
-              error: 'Employee not found in database'
+              error: 'Employee not found under your supervision'
             });
             continue;
           }
@@ -122,6 +129,15 @@ class ExcelUploadController {
       // Save each record to database
       for (const record of attendanceData) {
         try {
+          const scopedEmployee = await Employee.exists(scopeEmployeeQuery(req, { _id: record.employee_id }));
+          if (!scopedEmployee) {
+            failedRecords.push({
+              clmsId: record.clms_id,
+              error: 'Employee is not under your supervision'
+            });
+            continue;
+          }
+
           // Check for duplicate
           const existing = await AttendanceSalary.findOne({
             employee_id: record.employee_id,

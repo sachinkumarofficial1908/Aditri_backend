@@ -16,7 +16,7 @@ const projectSchema = new mongoose.Schema({
   startDate: Date,
   endDate: Date,
   value: String,
-  images: [{ url: String, alt: String }],
+  images: [{ url: String, alt: String, public_id: String }],
   isFeatured: { type: Boolean, default: false },
   isActive: { type: Boolean, default: true },
   tags: [String],

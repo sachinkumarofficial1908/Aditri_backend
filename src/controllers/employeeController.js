@@ -1,7 +1,26 @@
 'use strict';
 const { validationResult } = require('express-validator');
 const Employee = require('../models/Employee');
+const User = require('../models/User');
 const { logActivity } = require('../middleware/activityLogger');
+const { destroyCloudinaryAsset } = require('../config/cloudinary');
+
+const isSupervisorUser = (req) => req.user?.role === 'supervisor';
+
+const cleanupCloudinaryAsset = async (publicId) => {
+  try {
+    await destroyCloudinaryAsset(publicId);
+  } catch (err) {
+    // Keep the already-completed database action from failing because image cleanup failed.
+  }
+};
+
+const scopeEmployeeQuery = (req, query = {}) => {
+  if (isSupervisorUser(req)) {
+    return { ...query, supervisor_id: req.user._id };
+  }
+  return query;
+};
 
 const buildUpdateData = (body) => {
   const allowed = [
@@ -30,23 +49,59 @@ const buildUpdateData = (body) => {
     'dailyWagesRate',
     'govDailyWage',
     'photoPath',
+    'photoPublicId',
     'clmsId',
     'status',
+    'supervisor_id',
   ];
 
   return allowed.reduce((acc, key) => {
     if (Object.prototype.hasOwnProperty.call(body, key)) {
-      acc[key] = body[key];
+      acc[key] = key === 'supervisor_id' && body[key] === '' ? null : body[key];
     }
     return acc;
   }, {});
 };
 
+exports.getSupervisors = async (req, res, next) => {
+  try {
+    if (isSupervisorUser(req)) {
+      return res.json({
+        success: true,
+        supervisors: [{
+          _id: req.user._id,
+          name: req.user.name,
+          email: req.user.email,
+          phone: req.user.phone,
+          siteName: req.user.siteName,
+        }],
+      });
+    }
+
+    const supervisors = await User.find({ role: 'supervisor', isActive: true })
+      .select('name email phone siteName')
+      .sort({ name: 1 });
+
+    res.json({ success: true, supervisors });
+  } catch (err) { next(err); }
+};
+
 exports.getAllEmployees = async (req, res, next) => {
   try {
-    const { page = 1, limit = 50, status, search } = req.query;
-    const query = {};
+    const {
+      page = 1,
+      limit = 50,
+      status,
+      search,
+      designation,
+      gradeOfWork,
+    } = req.query;
+    const pageNumber = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNumber = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 10000);
+    const query = scopeEmployeeQuery(req, {});
     if (status) query.status = status;
+    if (designation) query.designation = designation;
+    if (gradeOfWork) query.gradeOfWork = gradeOfWork;
     if (search) {
       query.$or = [
         { name: new RegExp(search, 'i') },
@@ -58,17 +113,26 @@ exports.getAllEmployees = async (req, res, next) => {
 
     const total = await Employee.countDocuments(query);
     const employees = await Employee.find(query)
+      .populate('supervisor_id', 'name email phone siteName')
       .sort('-createdAt')
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit, 10));
+      .skip((pageNumber - 1) * limitNumber)
+      .limit(limitNumber);
 
-    res.json({ success: true, total, employees });
+    res.json({
+      success: true,
+      total,
+      page: pageNumber,
+      limit: limitNumber,
+      totalPages: Math.max(Math.ceil(total / limitNumber), 1),
+      employees,
+    });
   } catch (err) { next(err); }
 };
 
 exports.getEmployee = async (req, res, next) => {
   try {
-    const employee = await Employee.findById(req.params.id);
+    const employee = await Employee.findOne(scopeEmployeeQuery(req, { _id: req.params.id }))
+      .populate('supervisor_id', 'name email phone siteName');
     if (!employee) return res.status(404).json({ success: false, message: 'Employee not found' });
     res.json({ success: true, employee });
   } catch (err) { next(err); }
@@ -82,6 +146,9 @@ exports.createEmployee = async (req, res, next) => {
     }
 
     const data = buildUpdateData(req.body);
+    if (isSupervisorUser(req)) {
+      data.supervisor_id = req.user._id;
+    }
     
     // Convert date fields to proper Date objects
     if (data.dob && typeof data.dob === 'string') {
@@ -91,9 +158,10 @@ exports.createEmployee = async (req, res, next) => {
       data.dateOfJoining = new Date(data.dateOfJoining);
     }
     
-    // Add photo path if file was uploaded
+    // Add photo URL if file was uploaded
     if (req.file) {
-      data.photoPath = `/uploads/photos/${req.file.filename}`;
+      data.photoPath = req.file.cloudinary.secure_url;
+      data.photoPublicId = req.file.cloudinary.public_id;
     }
 
     const employee = await Employee.create({ ...data, createdBy: req.user._id });
@@ -113,6 +181,9 @@ exports.createEmployee = async (req, res, next) => {
 
     res.status(201).json({ success: true, employee });
   } catch (err) {
+    if (req.file?.cloudinary?.public_id) {
+      await cleanupCloudinaryAsset(req.file.cloudinary.public_id);
+    }
     if (err.code === 11000) {
       const field = Object.keys(err.keyValue)[0];
       return res.status(400).json({ success: false, message: `${field} must be unique` });
@@ -129,6 +200,9 @@ exports.updateEmployee = async (req, res, next) => {
     }
 
     const updateData = buildUpdateData(req.body);
+    if (isSupervisorUser(req)) {
+      delete updateData.supervisor_id;
+    }
     
     // Convert date fields to proper Date objects
     if (updateData.dob && typeof updateData.dob === 'string') {
@@ -138,16 +212,28 @@ exports.updateEmployee = async (req, res, next) => {
       updateData.dateOfJoining = new Date(updateData.dateOfJoining);
     }
     
-    // Add photo path if file was uploaded
+    let previousPhotoPublicId = null;
     if (req.file) {
-      updateData.photoPath = `/uploads/photos/${req.file.filename}`;
+      const existingEmployee = await Employee.findOne(scopeEmployeeQuery(req, { _id: req.params.id }))
+        .select('photoPublicId');
+      if (!existingEmployee) {
+        await cleanupCloudinaryAsset(req.file.cloudinary.public_id);
+        return res.status(404).json({ success: false, message: 'Employee not found' });
+      }
+      previousPhotoPublicId = existingEmployee.photoPublicId;
+      updateData.photoPath = req.file.cloudinary.secure_url;
+      updateData.photoPublicId = req.file.cloudinary.public_id;
     }
 
-    const employee = await Employee.findByIdAndUpdate(req.params.id, updateData, {
+    const employee = await Employee.findOneAndUpdate(scopeEmployeeQuery(req, { _id: req.params.id }), updateData, {
       new: true,
       runValidators: true,
     });
     if (!employee) return res.status(404).json({ success: false, message: 'Employee not found' });
+
+    if (previousPhotoPublicId && previousPhotoPublicId !== updateData.photoPublicId) {
+      await cleanupCloudinaryAsset(previousPhotoPublicId);
+    }
     
     // Log activity
     await logActivity({
@@ -164,6 +250,9 @@ exports.updateEmployee = async (req, res, next) => {
 
     res.json({ success: true, employee });
   } catch (err) {
+    if (req.file?.cloudinary?.public_id) {
+      await cleanupCloudinaryAsset(req.file.cloudinary.public_id);
+    }
     if (err.code === 11000) {
       const field = Object.keys(err.keyValue)[0];
       return res.status(400).json({ success: false, message: `${field} must be unique` });
@@ -174,8 +263,9 @@ exports.updateEmployee = async (req, res, next) => {
 
 exports.deleteEmployee = async (req, res, next) => {
   try {
-    const employee = await Employee.findByIdAndDelete(req.params.id);
+    const employee = await Employee.findOneAndDelete(scopeEmployeeQuery(req, { _id: req.params.id }));
     if (!employee) return res.status(404).json({ success: false, message: 'Employee not found' });
+    await cleanupCloudinaryAsset(employee.photoPublicId);
     
     // Log activity
     await logActivity({
@@ -196,7 +286,7 @@ exports.deleteEmployee = async (req, res, next) => {
 
 exports.terminateEmployee = async (req, res, next) => {
   try {
-    const employee = await Employee.findById(req.params.id);
+    const employee = await Employee.findOne(scopeEmployeeQuery(req, { _id: req.params.id }));
     if (!employee) return res.status(404).json({ success: false, message: 'Employee not found' });
     const oldStatus = employee.status;
     employee.status = 'Terminate';

@@ -2,9 +2,10 @@
 const router = require('express').Router();
 const { body } = require('express-validator');
 const { protect, authorize } = require('../middleware/auth');
-const photoUpload = require('../middleware/photoUpload');
+const { uploadSingleImage } = require('../middleware/cloudinaryUpload');
 const {
   getAllEmployees,
+  getSupervisors,
   getEmployee,
   createEmployee,
   updateEmployee,
@@ -102,6 +103,10 @@ const employeeValidation = [
     .optional({ checkFalsy: true })
     .isFloat({ min: 0 })
     .withMessage('Government daily wage must be a positive number'),
+  body('supervisor_id')
+    .optional({ checkFalsy: true })
+    .isMongoId()
+    .withMessage('Invalid supervisor selected'),
 ];
 
 const updateValidation = [
@@ -155,14 +160,21 @@ const updateValidation = [
     .optional({ checkFalsy: true })
     .isIn(['Valid', 'Terminate', 'Debarred'])
     .withMessage('Status must be Valid, Terminate, or Debarred'),
+  body('supervisor_id')
+    .optional({ checkFalsy: true })
+    .isMongoId()
+    .withMessage('Invalid supervisor selected'),
 ];
 
 router.use(protect, authorize('admin', 'supervisor'));
 
+const employeePhotoUpload = uploadSingleImage('photo', { folder: 'employees', maxFileSize: 5 * 1024 * 1024 });
+
 router.get('/', getAllEmployees);
+router.get('/supervisors', getSupervisors);
 router.get('/:id', getEmployee);
-router.post('/', photoUpload.single('photo'), employeeValidation, createEmployee);
-router.patch('/:id', photoUpload.single('photo'), updateValidation, updateEmployee);
+router.post('/', employeePhotoUpload, employeeValidation, createEmployee);
+router.patch('/:id', employeePhotoUpload, updateValidation, updateEmployee);
 router.patch('/:id/terminate', terminateEmployee);
 router.delete('/:id', deleteEmployee);
 

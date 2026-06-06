@@ -4,6 +4,13 @@ const Employee = require('../models/Employee');
 const { successResponse, errorResponse } = require('../utils/responseHandler');
 const { AppError } = require('../utils/errorHandler');
 
+const scopeEmployeeQuery = (req, query = {}) => {
+  if (req.user?.role === 'supervisor') {
+    return { ...query, supervisor_id: req.user._id };
+  }
+  return query;
+};
+
 class AttendanceController {
   /**
    * Save manual attendance entry
@@ -12,6 +19,21 @@ class AttendanceController {
     try {
       const { employee_id, clms_id, month, year, days_present, rate_per_day, ot_amount = 0, advance = 0 } = req.body;
       const supervisor_id = req.user.id;
+      const employeeLookup = [];
+      if (employee_id) employeeLookup.push({ _id: employee_id });
+      if (clms_id) employeeLookup.push({ clmsId: clms_id });
+
+      if (!employeeLookup.length) {
+        throw new AppError('Employee ID or CLMS ID is required', 400);
+      }
+
+      const scopedEmployee = await Employee.findOne(scopeEmployeeQuery(req, {
+        $or: employeeLookup,
+      })).select('_id');
+
+      if (!scopedEmployee) {
+        throw new AppError('Employee is not under your supervision', 403);
+      }
 
       const entry = await SalaryAttendanceService.saveAttendanceEntry({
         employee_id,
@@ -57,12 +79,12 @@ class AttendanceController {
       for (const entry of entries) {
         try {
           // Find employee by CLMS ID
-          const employee = await Employee.findOne({ clmsId: entry.clmsId });
+          const employee = await Employee.findOne(scopeEmployeeQuery(req, { clmsId: entry.clmsId }));
 
           if (!employee) {
             validationErrors.push({
               clmsId: entry.clmsId,
-              error: 'Employee not found',
+              error: 'Employee not found under your supervision',
             });
             continue;
           }
@@ -164,12 +186,15 @@ class AttendanceController {
   static async updateAttendanceEntry(req, res, next) {
     try {
       const { id } = req.params;
-      const { days_present, rate_per_day } = req.body;
+      const { days_present, rate_per_day, ot_amount, advance } = req.body;
+      const updates = {};
 
-      const entry = await SalaryAttendanceService.updateAttendanceEntry(id, {
-        days_present,
-        rate_per_day,
-      });
+      if (days_present !== undefined) updates.days_present = Number(days_present);
+      if (rate_per_day !== undefined) updates.rate_per_day = Number(rate_per_day);
+      if (ot_amount !== undefined) updates.ot_amount = Number(ot_amount);
+      if (advance !== undefined) updates.advance = Number(advance);
+
+      const entry = await SalaryAttendanceService.updateAttendanceEntry(id, updates);
 
       return successResponse(res, entry, 'Attendance entry updated successfully');
     } catch (error) {
@@ -204,13 +229,13 @@ class AttendanceController {
       }
 
       const employees = await Employee.find(
-        {
+        scopeEmployeeQuery(req, {
           $or: [
             { clmsId: { $regex: query, $options: 'i' } },
             { name: { $regex: query, $options: 'i' } },
           ],
           status: 'Valid',
-        },
+        }),
         'employeeId name clmsId designation dailyWagesRate govDailyWage gov_rate comp_rate'
       ).limit(10).lean();
 
@@ -240,10 +265,10 @@ class AttendanceController {
       const { clms_id, numberOfDays, salaryType, otAmount, advance } = req.body;
 
       // Find employee by CLMS ID
-      const employee = await Employee.findOne({ clmsId: clms_id });
+      const employee = await Employee.findOne(scopeEmployeeQuery(req, { clmsId: clms_id }));
 
       if (!employee) {
-        throw new AppError('Employee not found', 404);
+        throw new AppError('Employee not found under your supervision', 404);
       }
 
       // Get the salary calculation service

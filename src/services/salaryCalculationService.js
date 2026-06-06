@@ -18,18 +18,18 @@ class SalaryCalculationService {
     const { days, gov_rate, bonuses = [], pf_percentage = 12, esic_percentage = 0.75 } = data;
 
     // Validate inputs
-    if (!days || !gov_rate) {
+    if (days === undefined || days === null || Number(days) < 0 || gov_rate === undefined || gov_rate === null || Number(gov_rate) < 0) {
       throw new Error('Days and government rate are required');
     }
 
     // Calculate total amount (days × rate)
-    const totalAmount = this.roundToDecimal(days * gov_rate, 2);
+    const totalAmount = this.roundToDecimal(Number(days) * Number(gov_rate), 2);
 
     // Calculate bonuses
     const calculatedBonuses = bonuses.map((bonus) => ({
       name: bonus.name,
-      percentage: bonus.percentage,
-      amount: this.roundToDecimal((totalAmount * bonus.percentage) / 100, 2),
+      percentage: Number(bonus.percentage) || 0,
+      amount: this.roundToDecimal((totalAmount * (Number(bonus.percentage) || 0)) / 100, 2),
     }));
 
     // Calculate gross (total amount + all bonuses)
@@ -37,21 +37,21 @@ class SalaryCalculationService {
     const gross = this.roundToDecimal(totalAmount + bonusTotal, 2);
 
     // Calculate deductions
-    const pf = this.roundToDecimal((gross * pf_percentage) / 100, 2);
-    const esic = this.roundToDecimal((gross * esic_percentage) / 100, 2);
+    const pf = this.roundToDecimal((gross * (Number(pf_percentage) || 0)) / 100, 2);
+    const esic = this.roundToDecimal((gross * (Number(esic_percentage) || 0)) / 100, 2);
 
     // Calculate net
     const netDeduction = this.roundToDecimal(pf + esic, 2);
     const netPayable = this.roundToDecimal(gross - netDeduction, 2);
 
     return {
-      totalAmount,
+      total_amount: totalAmount,
       bonuses: calculatedBonuses,
       gross,
       pf,
       esic,
-      netDeduction,
-      netPayable,
+      net_deduction: netDeduction,
+      net_payable: netPayable,
     };
   }
 
@@ -69,18 +69,18 @@ class SalaryCalculationService {
     const { days, comp_rate, bonuses = [], pf = 0, esic = 0 } = data;
 
     // Validate inputs
-    if (!days || !comp_rate) {
+    if (days === undefined || days === null || Number(days) < 0 || comp_rate === undefined || comp_rate === null || Number(comp_rate) < 0) {
       throw new Error('Days and company rate are required');
     }
 
     // Calculate total amount (days × rate)
-    const totalAmount = this.roundToDecimal(days * comp_rate, 2);
+    const totalAmount = this.roundToDecimal(Number(days) * Number(comp_rate), 2);
 
     // Calculate bonuses
     const calculatedBonuses = bonuses.map((bonus) => ({
       name: bonus.name,
-      percentage: bonus.percentage,
-      amount: this.roundToDecimal((totalAmount * bonus.percentage) / 100, 2),
+      percentage: Number(bonus.percentage) || 0,
+      amount: this.roundToDecimal((totalAmount * (Number(bonus.percentage) || 0)) / 100, 2),
     }));
 
     // Calculate gross (total amount + all bonuses)
@@ -88,17 +88,19 @@ class SalaryCalculationService {
     const gross = this.roundToDecimal(totalAmount + bonusTotal, 2);
 
     // Use PF and ESIC from government salary
-    const netDeduction = this.roundToDecimal(pf + esic, 2);
+    const safePf = Number(pf) || 0;
+    const safeEsic = Number(esic) || 0;
+    const netDeduction = this.roundToDecimal(safePf + safeEsic, 2);
     const netPayable = this.roundToDecimal(gross - netDeduction, 2);
 
     return {
-      totalAmount,
+      total_amount: totalAmount,
       bonuses: calculatedBonuses,
       gross,
-      pf,
-      esic,
-      netDeduction,
-      netPayable,
+      pf: safePf,
+      esic: safeEsic,
+      net_deduction: netDeduction,
+      net_payable: netPayable,
     };
   }
 

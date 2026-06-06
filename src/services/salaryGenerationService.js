@@ -207,7 +207,44 @@ class SalaryGenerationService {
    */
   static async updateGovSalary(id, updates) {
     try {
-      const salary = await GovSalary.findByIdAndUpdate(id, updates, {
+      const existingSalary = await GovSalary.findById(id);
+
+      if (!existingSalary) {
+        throw new AppError('Government salary record not found', 404);
+      }
+
+      if (existingSalary.status === 'finalized') {
+        throw new AppError('Finalized government salary records cannot be edited', 400);
+      }
+
+      const employee = await Employee.findById(existingSalary.employee_id).select('govDailyWage gov_rate');
+      const databaseGovRate = employee?.govDailyWage ?? employee?.gov_rate;
+      const days = updates.days !== undefined ? Number(updates.days) : existingSalary.days;
+      const govRate = databaseGovRate !== undefined && databaseGovRate !== null
+        ? Number(databaseGovRate)
+        : existingSalary.gov_rate;
+      const bonuses = updates.bonuses !== undefined ? updates.bonuses : existingSalary.bonuses;
+      const pfPercentage = updates.pf_percentage !== undefined
+        ? Number(updates.pf_percentage)
+        : existingSalary.pf_percentage;
+      const esicPercentage = updates.esic_percentage !== undefined
+        ? Number(updates.esic_percentage)
+        : existingSalary.esic_percentage;
+      const salaryCalculation = SalaryCalculationService.calculateGovSalary({
+        days,
+        gov_rate: govRate,
+        bonuses,
+        pf_percentage: pfPercentage,
+        esic_percentage: esicPercentage,
+      });
+
+      const salary = await GovSalary.findByIdAndUpdate(id, {
+        days,
+        gov_rate: govRate,
+        pf_percentage: pfPercentage,
+        esic_percentage: esicPercentage,
+        ...salaryCalculation,
+      }, {
         new: true,
         runValidators: true,
       });
@@ -227,7 +264,49 @@ class SalaryGenerationService {
    */
   static async updateCompanySalary(id, updates) {
     try {
-      const salary = await CompanySalary.findByIdAndUpdate(id, updates, {
+      const existingSalary = await CompanySalary.findById(id);
+
+      if (!existingSalary) {
+        throw new AppError('Company salary record not found', 404);
+      }
+
+      if (existingSalary.status === 'finalized') {
+        throw new AppError('Finalized company salary records cannot be edited', 400);
+      }
+
+      const days = updates.days !== undefined ? Number(updates.days) : existingSalary.days;
+      const compRate = updates.comp_rate !== undefined ? Number(updates.comp_rate) : existingSalary.comp_rate;
+      const bonuses = updates.bonuses !== undefined ? updates.bonuses : existingSalary.bonuses;
+      const previewCalculation = SalaryCalculationService.calculateCompanySalary({
+        days,
+        comp_rate: compRate,
+        bonuses,
+        pf: existingSalary.pf,
+        esic: existingSalary.esic,
+      });
+      const pf = updates.pf_percentage !== undefined
+        ? SalaryCalculationService.roundToDecimal((previewCalculation.gross * Number(updates.pf_percentage)) / 100, 2)
+        : updates.pf !== undefined
+          ? Number(updates.pf)
+          : existingSalary.pf;
+      const esic = updates.esic_percentage !== undefined
+        ? SalaryCalculationService.roundToDecimal((previewCalculation.gross * Number(updates.esic_percentage)) / 100, 2)
+        : updates.esic !== undefined
+          ? Number(updates.esic)
+          : existingSalary.esic;
+      const salaryCalculation = SalaryCalculationService.calculateCompanySalary({
+        days,
+        comp_rate: compRate,
+        bonuses,
+        pf,
+        esic,
+      });
+
+      const salary = await CompanySalary.findByIdAndUpdate(id, {
+        days,
+        comp_rate: compRate,
+        ...salaryCalculation,
+      }, {
         new: true,
         runValidators: true,
       });

@@ -1,7 +1,13 @@
 'use strict';
 const router = require('express').Router();
 const { body } = require('express-validator');
-const { createOrder, getMyOrders, getAllOrders, updateOrderStatus } = require('../controllers/orderController');
+const {
+  createOrder,
+  createRazorpayPaymentOrder,
+  getMyOrders,
+  getAllOrders,
+  updateOrderStatus,
+} = require('../controllers/orderController');
 const { protect, adminOnly } = require('../middleware/auth');
 
 const orderValidation = [
@@ -20,8 +26,13 @@ const orderValidation = [
     .matches(/^\d{10}$/)
     .withMessage('Delivery phone number must be exactly 10 digits'),
   body('phoneVerificationToken').trim().notEmpty().withMessage('Please verify your delivery phone number'),
+  body('paymentMethod')
+    .optional()
+    .isIn(['cod', 'bank_transfer', 'upi', 'online', 'razorpay'])
+    .withMessage('Unsupported payment method'),
 ];
 
+router.post('/payment-order', protect, orderValidation, createRazorpayPaymentOrder);
 router.post('/', protect, orderValidation, createOrder);
 router.get('/my', protect, getMyOrders);
 router.get('/', protect, adminOnly, getAllOrders);

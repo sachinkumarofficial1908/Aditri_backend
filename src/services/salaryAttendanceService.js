@@ -114,6 +114,24 @@ class SalaryAttendanceService {
    */
   static async updateAttendanceEntry(id, updates) {
     try {
+      const currentEntry = await AttendanceSalary.findById(id);
+
+      if (!currentEntry) {
+        throw new AppError('Attendance entry not found', 404);
+      }
+
+      this.validateAttendanceData({
+        employee_id: currentEntry.employee_id,
+        clms_id: currentEntry.clms_id,
+        month: currentEntry.month,
+        year: currentEntry.year,
+        days_present: updates.days_present !== undefined ? updates.days_present : currentEntry.days_present,
+        rate_per_day: updates.rate_per_day !== undefined ? updates.rate_per_day : currentEntry.rate_per_day,
+        ot_amount: updates.ot_amount !== undefined ? updates.ot_amount : currentEntry.ot_amount,
+        advance: updates.advance !== undefined ? updates.advance : currentEntry.advance,
+        supervisor_id: currentEntry.entered_by_supervisor,
+      });
+
       const entry = await AttendanceSalary.findByIdAndUpdate(id, updates, {
         new: true,
         runValidators: true,
