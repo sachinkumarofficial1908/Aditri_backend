@@ -1,22 +1,41 @@
 'use strict';
 
+require('dotenv').config();
 const Razorpay = require('razorpay');
 
-const hasRazorpayCredentials = Boolean(
-  process.env.RAZORPAY_KEY_ID
-  && process.env.RAZORPAY_KEY_SECRET
-);
+const getEnv = (...keys) => {
+  for (const key of keys) {
+    const value = process.env[key]?.trim();
+    if (value) return value;
+  }
+  return '';
+};
 
-const razorpay = hasRazorpayCredentials
-  ? new Razorpay({
-    key_id: process.env.RAZORPAY_KEY_ID,
-    key_secret: process.env.RAZORPAY_KEY_SECRET,
-  })
-  : null;
+const getRazorpayKeyId = () => getEnv('RAZORPAY_KEY_ID', 'Test_Key_ID', 'RAZORPAY_TEST_KEY_ID');
+const getRazorpayKeySecret = () => getEnv('RAZORPAY_KEY_SECRET', 'Test_Key_Secret', 'RAZORPAY_TEST_KEY_SECRET');
+
+let razorpayClient = null;
+let configuredSignature = '';
+
+const getRazorpayClient = () => {
+  const keyId = getRazorpayKeyId();
+  const keySecret = getRazorpayKeySecret();
+  if (!keyId || !keySecret) return null;
+
+  const nextSignature = `${keyId}:${keySecret}`;
+  if (razorpayClient && configuredSignature === nextSignature) return razorpayClient;
+
+  razorpayClient = new Razorpay({
+    key_id: keyId,
+    key_secret: keySecret,
+  });
+  configuredSignature = nextSignature;
+  return razorpayClient;
+};
 
 const assertRazorpayConfigured = () => {
-  if (!razorpay) {
-    const error = new Error('Razorpay is not configured. Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET.');
+  if (!getRazorpayClient()) {
+    const error = new Error('Razorpay is not configured. Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in Render/backend env.');
     error.statusCode = 500;
     throw error;
   }
@@ -24,6 +43,7 @@ const assertRazorpayConfigured = () => {
 
 module.exports = {
   assertRazorpayConfigured,
-  getRazorpayKeyId: () => process.env.RAZORPAY_KEY_ID,
-  razorpay,
+  getRazorpayClient,
+  getRazorpayKeyId,
+  getRazorpayKeySecret,
 };

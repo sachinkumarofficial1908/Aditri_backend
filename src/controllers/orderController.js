@@ -6,7 +6,12 @@ const Product = require('../models/Product');
 const User = require('../models/User');
 const { validationResult } = require('express-validator');
 const firebaseAdmin = require('../config/firebaseAdmin');
-const { assertRazorpayConfigured, getRazorpayKeyId, razorpay } = require('../config/razorpay');
+const {
+  assertRazorpayConfigured,
+  getRazorpayClient,
+  getRazorpayKeyId,
+  getRazorpayKeySecret,
+} = require('../config/razorpay');
 
 const TEST_OTP_PHONE = '9999999999';
 const DEFAULT_GST_RATE = 18;
@@ -98,7 +103,7 @@ const validateItemsAndCalculateTotals = async (items) => {
     });
   }
 
-  const shippingCost = subtotal > 10000 ? 0 : 200;
+  const shippingCost = 0;
   const total = subtotal + tax + shippingCost;
   return { subtotal, tax, shippingCost, total, validatedItems };
 };
@@ -107,6 +112,7 @@ const toRazorpayAmount = (amount) => Math.round(Number(amount) * 100);
 
 const verifyRazorpayPayment = async (payment, total) => {
   assertRazorpayConfigured();
+  const razorpay = getRazorpayClient();
 
   const {
     razorpay_order_id: razorpayOrderId,
@@ -119,7 +125,7 @@ const verifyRazorpayPayment = async (payment, total) => {
   }
 
   const expectedSignature = crypto
-    .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+    .createHmac('sha256', getRazorpayKeySecret())
     .update(`${razorpayOrderId}|${razorpayPaymentId}`)
     .digest('hex');
 
@@ -154,6 +160,7 @@ const verifyRazorpayPayment = async (payment, total) => {
 exports.createRazorpayPaymentOrder = async (req, res, next) => {
   try {
     assertRazorpayConfigured();
+    const razorpay = getRazorpayClient();
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
 
