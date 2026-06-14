@@ -4,7 +4,6 @@ require('dotenv').config();
 const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
-const morgan = require('morgan');
 const compression = require('compression');
 const cookieParser = require('cookie-parser');
 const mongoSanitize = require('express-mongo-sanitize');
@@ -15,6 +14,8 @@ const path = require('path');
 
 const connectDB = require('./src/config/database');
 const logger = require('./src/utils/logger');
+const { getMorganMiddleware } = require('./src/utils/morganLogger');
+const { activityLoggerMiddleware } = require('./src/middleware/activityLogger');
 const errorHandler = require('./src/middleware/errorHandler');
 
 // Routes
@@ -115,14 +116,12 @@ app.use(mongoSanitize());
 app.use(xssClean());
 app.use(hpp());
 
-// Logging
-if (process.env.NODE_ENV === 'development') {
-  app.use(morgan('dev'));
-} else {
-  app.use(morgan('combined', {
-    stream: { write: (msg) => logger.info(msg.trim()) },
-  }));
-}
+// ─── Logging Middleware ────────────────────────────────────────────────────────
+// HTTP request logging with Morgan and Winston
+app.use(getMorganMiddleware());
+
+// Activity logging middleware
+app.use(activityLoggerMiddleware);
 
 // Static files (uploads)
 app.use('/uploads', express.static(getUploadDir(), {
