@@ -498,20 +498,19 @@ exports.login = async (req, res, next) => {
     user.lastLogin = new Date();
     await user.save();
 
-    // Log activity for admin/supervisor logins
-    if (user.role === 'admin' || user.role === 'supervisor') {
-      await logActivity({
-        req,
-        adminId: user._id,
-        adminName: user.name,
-        adminEmail: user.email,
-        action: 'login',
-        targetType: 'auth',
-        status: 'success',
-      });
-    }
+    // Log activity for all user logins
+    await logActivity({
+      req,
+      userId: user._id,
+      userName: user.name,
+      userEmail: user.email,
+      userRole: user.role,
+      action: 'login',
+      targetType: 'auth',
+      status: 'success',
+    });
 
-    logger.info(`User logged in: ${email}`);
+    logger.info(`User logged in: ${email}`, { userId: user._id, role: user.role });
     sendToken(user, 200, res);
   } catch (err) { next(err); }
 };

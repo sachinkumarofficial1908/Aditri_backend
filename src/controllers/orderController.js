@@ -6,6 +6,7 @@ const Product = require('../models/Product');
 const User = require('../models/User');
 const { validationResult } = require('express-validator');
 const firebaseAdmin = require('../config/firebaseAdmin');
+const tracker = require('../utils/activityTracker');
 const {
   assertRazorpayConfigured,
   getRazorpayClient,
@@ -245,6 +246,11 @@ exports.createOrder = async (req, res, next) => {
     // Deduct stock
     for (const item of validatedItems) {
       await Product.findByIdAndUpdate(item.product, { $inc: { stock: -item.qty } });
+    }
+
+    // Log activity if user is authenticated
+    if (req.user) {
+      await tracker.logOrderCreate(req, order);
     }
 
     res.status(201).json({ success: true, order });

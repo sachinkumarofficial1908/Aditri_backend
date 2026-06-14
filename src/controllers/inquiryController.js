@@ -3,6 +3,7 @@ const Inquiry = require('../models/Inquiry');
 const { validationResult } = require('express-validator');
 const nodemailer = require('nodemailer');
 const logger = require('../utils/logger');
+const tracker = require('../utils/activityTracker');
 
 const getSmtpConfig = () => {
   const port = parseInt(process.env.SMTP_PORT, 10) || 587;
@@ -85,6 +86,9 @@ exports.createInquiry = async (req, res, next) => {
       ipAddress: req.ip,
       userAgent: req.headers['user-agent'],
     });
+
+    // Log activity
+    await tracker.logInquiryCreate(req, inquiry);
 
     res.status(201).json({ success: true, message: 'Inquiry submitted successfully', id: inquiry._id });
 

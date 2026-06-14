@@ -250,6 +250,46 @@ const logError = async (req, action, targetType, errorMessage) => {
   }
 };
 
+// ─── Order Activities ───────────────────────────────────────────────────────────
+
+const logOrderCreate = async (req, order) => {
+  await trackActivity(
+    req,
+    'order_create',
+    'order',
+    order._id,
+    `Order #${order._id.toString().slice(-6).toUpperCase()}`,
+    { items: order.items.length, total: order.total, paymentMethod: order.paymentMethod },
+    'success'
+  );
+};
+
+const logOrderCancel = async (req, order) => {
+  await trackActivity(
+    req,
+    'order_cancel',
+    'order',
+    order._id,
+    `Order #${order._id.toString().slice(-6).toUpperCase()}`,
+    { items: order.items.length, total: order.total },
+    'success'
+  );
+};
+
+// ─── Inquiry Activities ─────────────────────────────────────────────────────────
+
+const logInquiryCreate = async (req, inquiry) => {
+  await trackActivity(
+    req,
+    'inquiry_create',
+    'inquiry',
+    inquiry._id,
+    `Inquiry: ${inquiry.title}`,
+    { category: inquiry.category, email: inquiry.email },
+    'success'
+  );
+};
+
 module.exports = {
   // Auth
   logLogin,
@@ -276,6 +316,11 @@ module.exports = {
   logExcelUpload,
   // Export
   logExportData,
+  // Order
+  logOrderCreate,
+  logOrderCancel,
+  // Inquiry
+  logInquiryCreate,
   // Error
   logError,
 };
